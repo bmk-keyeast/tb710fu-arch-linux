@@ -1,0 +1,12 @@
+[submodule "LTBox"]
+	path = LTBox
+	url = https://github.com/miner7222/LTBox.git
+[submodule "device-lenovo-tb710fu"]
+	path = device-lenovo-tb710fu
+	url = https://github.com/SpendyYT/device-lenovo-tb710fu.git
+[submodule "linux-firmware-tb710fu"]
+	path = linux-firmware-tb710fu
+	url = https://github.com/SpendyYT/linux-firmware-tb710fu.git
+[submodule "tb710fu-mainline"]
+	path = tb710fu-mainline
+	url = https://github.com/SpendyYT/tb710fu-mainline.git

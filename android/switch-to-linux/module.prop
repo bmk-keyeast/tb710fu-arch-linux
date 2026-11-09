@@ -1,0 +1,6 @@
+id=tb710fu_switch_to_linux
+name=Reboot to Linux (TB710FU)
+version=v1
+versionCode=1
+author=bmk
+description=Action button: make the other A/B slot (Linux) active and reboot.
