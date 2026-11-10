@@ -30,7 +30,15 @@ def main(d):
         ver = re.search(r"Linux version (\S+)", t)
         print(f"== {os.path.basename(f)}: kernel {ver.group(1) if ver else '?'}")
         if not ver or not ver.group(1).startswith("7."):
-            print("   not a mainline log (stock Android kernel) -> mainline never ran: ABL rejected or did not load slot b")
+            if "tb710fu.e1big=1" in t:
+                print("   E1big: stock kernel ran from slot b with the 64 MiB vendor ramdisk -> ABL loads big vendor ramdisks")
+            elif "tb710fu-e1" in t:
+                print("   E1: stock kernel ran from slot b -> slot b firmware chain + signing accepted by ABL")
+            else:
+                print("   stock Android log only -> no slot-b kernel ran: ABL rejected or did not load slot b")
+            for line in t.splitlines():
+                if re.search(r"Kernel command line|No working init|Kernel panic", line):
+                    print("   " + line.strip()[:160])
             continue
         last = None
         for rx, meaning in MARKERS:

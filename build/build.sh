@@ -6,7 +6,7 @@
 #   build.sh rootfs    ALARM + Plasma via qemu chroot, modules, firmware, UCM, initramfs (sudo)
 #   build.sh bootimg   out/boot.img (header v2, DTB appended), unsigned
 #   build.sh image     out/tb710fu-ssd.img.xz for Rufus/balenaEtcher (sudo)
-#   build.sh v4 e1|e2|e3 [STOCK_DIR]   locked-bootloader GKI v4 slot-b payload -> out/v4/<mode>/
+#   build.sh v4 e1|e1big|e2|e3 [STOCK_DIR]   locked-bootloader GKI v4 slot-b payload -> out/v4/<mode>/
 #   build.sh sign STOCK_BOOT STOCK_VBMETA   testkey AVB footer -> out/boot-signed.img (+ out/vbmeta-signed.img if needed)
 #   build.sh all       deps kernel rootfs bootimg image
 set -euo pipefail
@@ -256,7 +256,8 @@ v4() {
 	#   v4 e1   stock Android kernel, init=/nonexistent panic=5 -> proves ABL accepts slot b (no userspace)
 	#   v4 e2   mainline kernel + DTB + our initramfs
 	#   v4 e3   e2 + zeroed dtbo (in case ABL fails applying stock overlays to the mainline DTB)
-	local mode="${1:?v4 e1|e2|e3}" S="${2:-$T/dump}" py="python3 -I" key="$HERE/testkey_rsa4096.pem"
+	#   v4 e1big  e1 + 64 MiB vendor ramdisk filler (does ABL load a big vendor ramdisk?)
+	local mode="${1:?v4 e1|e1big|e2|e3}" S="${2:-$T/dump}" py="python3 -I" key="$HERE/testkey_rsa4096.pem"
 	local d="$OUT/v4/$mode" ri psize=100663296
 	rm -rf "$d" && mkdir -p "$d"
 	ri=$($py -c 'import sys; sys.path.insert(0, sys.argv[1]); import avbinfo
@@ -265,6 +266,20 @@ print(avbinfo.parse(avbinfo.vbmeta_blob(open(sys.argv[2], "rb").read())[0])["rol
 	e1)
 		$py "$HERE/bootv4.py" boot "$S/boot_a.img" "$d/boot_b.img" \
 			--cmdline "panic=5 rdinit=/tb710fu-e1 init=/tb710fu-e1"
+		;;
+	e1big)
+		# e1 + 64 MiB of incompressible filler appended to the stock vendor ramdisk:
+		# does this ABL load a vendor ramdisk well beyond 15 MiB? (marker in cmdline -> ramoops)
+		head -c 67108864 /dev/urandom > "$d/filler"
+		$py "$HERE/bootv4.py" boot "$S/boot_a.img" "$d/boot_b.img" \
+			--cmdline "panic=5 rdinit=/tb710fu-e1 init=/tb710fu-e1 tb710fu.e1big=1"
+		$py "$HERE/bootv4.py" vendor_boot "$S/vendor_boot_a.img" "$d/vendor_boot_b.img" \
+			--overlay tb710fu-filler="$d/filler"
+		rm -f "$d/filler"
+		$py "$HERE/avbsign.py" refresh "$S/vbmeta_a.img" "$d/vbmeta_b.img" "$key" \
+			vendor_boot="$d/vendor_boot_b.img"
+		[ "$($py "$HERE/avbsign.py" verify "$d/vbmeta_b.img" "$key")" = OK ] || die "vbmeta_b verify failed"
+		truncate -s "$(stat -c %s "$S/vendor_boot_a.img")" "$d/vendor_boot_b.img"
 		;;
 	e2|e3)
 		local dtb="$KSRC/arch/arm64/boot/dts/qcom/sm8650-lenovo-tb710fu.dtb"
@@ -289,7 +304,7 @@ print(avbinfo.parse(avbinfo.vbmeta_blob(open(sys.argv[2], "rb").read())[0])["rol
 		if [ "$mode" = e3 ]; then truncate -s 25165824 "$d/dtbo_b.img"; fi
 		for p in vendor_boot init_boot; do truncate -s "$(stat -c %s "$S/${p}_a.img")" "$d/${p}_b.img"; done
 		;;
-	*) die "v4 e1|e2|e3" ;;
+	*) die "v4 e1|e1big|e2|e3" ;;
 	esac
 	$py "$HERE/avbsign.py" footer "$d/boot_b.img" "$psize" "$ri" "$key"
 	[ "$($py "$HERE/avbsign.py" verify "$d/boot_b.img" "$key")" = OK ] || die "boot_b verify failed"

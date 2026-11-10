@@ -30,3 +30,4 @@ slot "v2 boot (rejected 11-10)" - "$OUT/../out/boot-signed.img"
 slot "E1 stock kernel baseline" $OUT/v4/e1
 VERBOSE=1 slot "E2 mainline v4" $OUT/v4/e2
 slot "E3 mainline v4 + empty dtbo" $OUT/v4/e3
+slot "E1big stock kernel + 64M ramdisk" $OUT/v4/e1big
