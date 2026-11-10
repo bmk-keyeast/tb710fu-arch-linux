@@ -27,6 +27,24 @@
 | E3 | E2 + dtbo 0으로 채움 | 순정 오버레이가 mainline DTB에 적용 실패해서 막히는지 |
 | E1 | 순정 Android 커널 + `init=/없음 panic=5` | 슬롯 b 펌웨어 체인 + 서명 경로가 통과하는지 (유저공간 안 뜸 → 데이터 안전) |
 
+**오프라인 검증 (기기 없이, 2026-11-10 밤)**
+
+| 검증 | 도구 | 결과 |
+|---|---|---|
+| AOSP libavb `avb_slot_verify` (잠김, testkey만 신뢰, 요청 boot/dtbo/vendor_boot/init_boot, 실제 롤백 floor) | `build/avbverify/` | 순정 a, **거부됐던 v2**, E1, E1big, E2, E3 전부 OK → v2 거부는 AVB가 아니라 ABL 이미지 로드 문제. 음성 대조군(변조·다른 키·롤백)은 맞는 오류로 실패 |
+| QEMU virt + ABL과 같은 initrd(vendor ramdisk + init_boot ramdisk + bootconfig 트레일러), 디스크 없음 | `build/qemu-test.sh nodisk` | `Load bootconfig: 216 bytes 16 nodes`, initramfs `/init` 실행, 폴백 hook 동작 |
+| 같은 조건 + USB 이미지 사본(31G virtio) | `qemu-test.sh disk` | PARTUUID로 루트 마운트 → systemd → SDDM → 그래픽 타깃 → 로그인. **첫 부팅 버그 2개 발견·수정** (아래) |
+| 수정 후 전체 부팅 2회 | 〃 | 1회차: 루트 8.4→15.5G 온라인 확장, `/home` 15.5G 생성·마운트. 2회차: 첫 부팅 건너뜀, `/home` 마운트 |
+
+찾아서 고친 것:
+- 첫 부팅 `/home` 생성 실패: ① `--relocate` 뒤 별도 `sfdisk -N 1`이 systemd 환경에서 실패, ② `lsblk -no PARTUUID`가 udev db 이전이라 빈 값 → GPT를 한 번에 다시 쓰고(루트 시작/PARTUUID 유지, PARTUUID는 `blkid`), 값이 없으면 GPT를 건드리지 않음 (`build/rootfs-files/tb710fu-firstboot`)
+- 폴백 hook: qbootctl이 실패하면 비상 셸에 갇히던 것 → 항상 재부팅 (ABL 재시도 소진 시 슬롯 a). v4 페이로드는 `--overlay`로 최신 hook을 initramfs 뒤에 덧붙임 (sudo 없이)
+- 디버그 도구: `qemu-shell.py`(QEMU 루트 셸 자동 조작), `imgpatch.sh`(이미지 안 파일 교체, sudo 없이), `write-usb.ps1`(USB 쓰기 + 읽어서 해시 검증)
+
+**아침에 반영할 것** (기기·USB를 건드리므로 사용자 결정 후, UniXNU 세션과 사전 공지)
+1. USB 다시 쓰기: `out/tb710fu-ssd.img.xz` (수정된 첫 부팅 포함, sha256은 `out/tb710fu-ssd.img.sha256`). 지금 USB의 첫 부팅 스크립트는 구버전이라 `/home`이 안 만들어짐 (부팅 자체는 됨)
+2. 슬롯 b E2 재기록: 지금 슬롯 b의 E2는 폴백 hook 수정 전 버전. 테스트에 USB를 꽂는다면 차이 없음
+
 **테스트 절차**
 1. USB(이미지 기록됨)를 OTG로 연결 → KernelSU "Reboot to Linux"
 2. Linux가 뜨면 성공. Android로 돌아오면 adb 연결 → `collect-boot-log.sh` → `bootlog.py`로 판별
