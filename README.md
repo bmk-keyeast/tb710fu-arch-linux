@@ -2,6 +2,15 @@
 
 배경/설계: Obsidian `R&E/TB710FU 리눅스/` (00 MOC ~ 08)
 
+## 슬롯 상태 (2026-11-10, 루트 Android에서 읽기 전용 덤프, `out/dump-20261110/`)
+
+- 펌웨어 `ZUI_17.5.04.070 ROW`, 현재 슬롯 `_a`, 잠김(green), KernelSU 루트. EDL 프로그래머 없음 → **루트 Android에서 기록**
+- `vbmeta_a`/`vbmeta_b` 둘 다 testkey 서명, `boot` chain도 testkey → **vbmeta 재키잉 불필요**
+- `build/avbcheck.py`로 해시 대조: 슬롯 a 전부 MATCH, **슬롯 b는 dtbo·vendor_boot MISMATCH** (059 ROW vbmeta + PRC 이미지가 섞임). `vbmeta_system_b` 롤백 인덱스(1759622400)도 슬롯 a(1780617600)보다 낮음 → 슬롯 b는 지금 상태로는 부팅 거부될 것
+- 그래서 [android/flash-slot-b.sh](android/flash-slot-b.sh): 슬롯 a의 `vbmeta vbmeta_system dtbo vendor_boot init_boot recovery`를 슬롯 b로 복사 + `boot_b`에 Linux. 슬롯 a는 안 건드림, 기본은 dry run, `--write`일 때 슬롯 b 백업 후 기록·검증
+- **2026-11-10 기록 완료**: 다시 덤프해서 슬롯 b 해시 전부 MATCH, `boot_b` = `boot-signed.img`(testkey OK), 슬롯 a 7개 파티션 덤프와 동일, 활성 슬롯 `_a` 그대로. 슬롯 b 원본 백업: `out/backup-slot-b-20261110/` (기기에도 `/data/local/tmp/tb710fu-flash/backup-slot-b`)
+- 첫 부팅 루트 크기: `min(ROOT_SIZE, 디스크 절반)` → 32GB USB면 루트 ~15.5G + `/home` ~15.5G
+
 ## 현재 상태 (2026-11-05)
 
 | 산출물 (WSL `~/tb710fu/out/`) | 상태 |
@@ -78,8 +87,19 @@ SSD는 `ROOT_SIZE` + 여유 공간보다 커야 한다 (128GB 이상 권장).
    - vbmeta의 `boot` chain 키가 이미 testkey면 → `boot-signed.img`만 만든다
    - chain 키가 Lenovo 정식 키(`8fcb…`, 8월 펌웨어가 이 경우)면 → `boot` chain 키만 testkey로 바꾸고 재서명한 `vbmeta-signed.img`도 만든다. 나머지 descriptor는 원본 그대로
    - `python3 -I build/avbsign.py selftest build/testkey_rsa4096.pem`로 자체 점검. 실제 덤프 3개(LTBox/Lenovo 서명) 검증 통과 확인함
-3. LTBox 고급 → **파티션 플래싱**으로 같은 슬롯에 기록: `boot-signed.img` → `boot_b`, (있으면) `vbmeta-signed.img` → `vbmeta_b`. `vbmeta_a`(Android)는 건드리지 않는다
-4. 슬롯 전환 (`fastboot --set-active=b`가 안 되면 EDL), SSD 꽂고 부팅
+3. 기록: EDL이 되면 LTBox 고급 → 파티션 플래싱, 안 되면 루트 Android에서 `android/flash-slot-b.sh DIR --write` (슬롯 a 체인을 슬롯 b로 복사 + `boot_b`)
+4. 슬롯 전환: KernelSU "Reboot to Linux" 액션, SSD 꽂고 부팅
+
+### 자동 폴백 (슬롯 a로 돌아가기)
+
+| 상황 | 동작 |
+|---|---|
+| SSD가 없거나 루트 파티션이 안 보임 | initramfs hook `tb710fu-fallback`이 `tb710fu.wait`초(기본 30) 기다린 뒤 `qbootctl -s a` + 재부팅 |
+| 커널 패닉 | `panic=10`으로 10초 뒤 재부팅 → ABL 재시도 횟수 소진 시 슬롯 a |
+| 정상 부팅 | `qbootctl-mark-successful`이 슬롯 b를 성공으로 표시 |
+| 데스크톱에서 수동 | 앱 메뉴 "Android로 재부팅" |
+
+대기 시간은 `config.env`의 `CMDLINE`에서 `tb710fu.wait=` 값으로 조정 (boot.img 재생성 필요).
 
 > 미검증: Lenovo ABL이 header v2 + 우리 ramdisk를 그대로 받는지. 실패하면 ABL이 반대 슬롯으로 롤백하거나 EDL로 복구.
 

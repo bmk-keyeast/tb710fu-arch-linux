@@ -127,7 +127,41 @@ Icon=system-reboot
 Categories=System;
 EOF
 
-	log "first boot: grow root, create /home"
+	log "initramfs fallback: no root SSD -> slot a"
+	# mkinitcpio hook: wait tb710fu.wait=N seconds (default 30) for the root partition;
+	# if it never shows up (SSD unplugged/dead) make slot a active and reboot into Android.
+	sudo mkdir -p "$R/etc/initcpio/install" "$R/etc/initcpio/hooks"
+	sudo tee "$R/etc/initcpio/install/tb710fu-fallback" >/dev/null <<'EOF'
+#!/bin/bash
+build() {
+	add_binary qbootctl
+	add_runscript
+}
+help() {
+	echo "Fall back to A/B slot a when the root device does not appear."
+}
+EOF
+	sudo tee "$R/etc/initcpio/hooks/tb710fu-fallback" >/dev/null <<'EOF'
+#!/usr/bin/ash
+run_hook() {
+	local wait=30 arg uuid i=0
+	for arg in $(cat /proc/cmdline); do
+		case "$arg" in tb710fu.wait=*) wait="${arg#tb710fu.wait=}" ;; esac
+	done
+	case "$root" in PARTUUID=*) uuid="${root#PARTUUID=}" ;; *) return 0 ;; esac
+	while [ ! -e "/dev/disk/by-partuuid/$uuid" ]; do
+		if [ "$i" -ge "$wait" ]; then
+			echo ":: tb710fu: root PARTUUID=$uuid not found after ${wait}s -> slot a"
+			qbootctl -s a && sleep 3 && reboot -f
+			echo ":: tb710fu: could not switch slot/reboot, continuing"
+			return 0
+		fi
+		[ "$i" = 0 ] && echo ":: tb710fu: waiting up to ${wait}s for the root SSD"
+		sleep 1
+		i=$((i + 1))
+	done
+}
+EOF
 	# The SSD image only carries a small root partition (build.sh image); the disk size is
 	# known only on the device, so the rest is laid out on first boot.
 	printf 'ROOT_SIZE=%s\nHOME_PARTUUID=%s\n' "$ROOT_SIZE" "$HOME_PARTUUID" | sudo tee "$R/etc/tb710fu.conf" >/dev/null
@@ -142,7 +176,14 @@ disk=/dev/$(lsblk -no PKNAME "$root")
 if [ ! -e "$home" ]; then
 	# the image was written to a bigger disk: move the backup GPT to the real end first
 	sfdisk --relocate gpt-bak-std "$disk"
-	echo ", $ROOT_SIZE" | sfdisk --no-reread --force -N 1 "$disk"
+	# root gets ROOT_SIZE, but at most half the disk (e.g. a 32GB stick: ~15G / ~15G),
+	# and never less than it already is
+	disk_mib=$(( $(blockdev --getsize64 "$disk") / 1048576 ))
+	cur_mib=$(( $(blockdev --getsize64 "$root") / 1048576 ))
+	want_mib=$(( $(numfmt --from=iec "$ROOT_SIZE") / 1048576 ))
+	[ "$want_mib" -gt $((disk_mib / 2)) ] && want_mib=$((disk_mib / 2))
+	[ "$want_mib" -lt "$cur_mib" ] && want_mib=$cur_mib
+	echo ", ${want_mib}MiB" | sfdisk --no-reread --force -N 1 "$disk"
 	echo "type=933AC7E1-2EB4-4F13-B844-0E14E2AEF915, uuid=$HOME_PARTUUID, name=tb710fu-home" |
 		sfdisk --no-reread --force --append "$disk"
 	partx -u "$disk"
@@ -188,7 +229,7 @@ EOF
 MODULES=()
 BINARIES=()
 FILES=()
-HOOKS=(base udev modconf block filesystems fsck)
+HOOKS=(base udev modconf block tb710fu-fallback filesystems fsck)
 COMPRESSION="zstd"
 EOF
 	sudo arch-chroot "$R" /bin/bash -e <<EOF
@@ -215,6 +256,8 @@ rm -f /boot/initramfs-tb710fu.img
 # non-fatal: warns about modules this kernel doesn't build; the image check below is what counts
 mkinitcpio -k $(kver) -c /etc/mkinitcpio-tb710fu.conf -g /boot/initramfs-tb710fu.img || true
 lsinitcpio /boot/initramfs-tb710fu.img | grep -q "usr/lib/modules/$(kver)/modules.dep"
+lsinitcpio /boot/initramfs-tb710fu.img | grep -q "hooks/tb710fu-fallback"
+lsinitcpio /boot/initramfs-tb710fu.img | grep -q "bin/qbootctl"
 EOF
 	sudo cp "$R/boot/initramfs-tb710fu.img" "$OUT/initramfs.img"
 	sudo chown "$(id -u):$(id -g)" "$OUT/initramfs.img"
