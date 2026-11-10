@@ -7,7 +7,9 @@ only the payloads are swapped.
 
   bootv4.py boot        STOCK_BOOT OUT [--kernel F] [--cmdline S]
   bootv4.py init_boot   STOCK_INIT_BOOT OUT --ramdisk F          (use 'empty' for an empty cpio)
-  bootv4.py vendor_boot STOCK_VENDOR_BOOT OUT [--ramdisk F] [--dtb F]
+  bootv4.py vendor_boot STOCK_VENDOR_BOOT OUT [--ramdisk F] [--dtb F] [--overlay DEST=SRC ...]
+      --overlay appends a root-owned cpio after the ramdisk; the kernel unpacks it last, so DEST
+      (e.g. hooks/tb710fu-fallback) replaces the same path from the ramdisk
   bootv4.py selftest    DUMP_DIR      (rebuild stock a-slot images from their own parts, compare)
 Output is the bare image (no AVB footer, no padding); sign/footer with avbsign.py.
 """
@@ -27,8 +29,18 @@ def strip_footer(d):
     return d
 
 
-EMPTY_CPIO = pad(b"070701" + b"0" * 8 * 11 + b"0000000B" + b"0" * 8 + b"TRAILER!!!\0", 4)
-EMPTY_CPIO = pad(EMPTY_CPIO, 512)
+def newc(entries):
+    """Uncompressed newc cpio of (path, mode, data) owned by root, with trailer, padded to 512."""
+    out = b""
+    for ino, (name, mode, data) in enumerate(list(entries) + [("TRAILER!!!", 0, b"")], 1):
+        nm = name.encode() + b"\0"
+        fields = (ino if name != "TRAILER!!!" else 0, mode, 0, 0, 1, 0, len(data), 0, 0, 0, 0, len(nm), 0)
+        hdr = b"070701" + b"".join(b"%08X" % f for f in fields)
+        out += pad(hdr + nm, 4) + pad(data, 4)
+    return pad(out, 512)
+
+
+EMPTY_CPIO = newc([])
 
 # ---------------------------------------------------------------- boot / init_boot (v4)
 
@@ -146,6 +158,7 @@ def main():
     ap.add_argument("stock")
     ap.add_argument("out", nargs="?")
     ap.add_argument("--kernel"); ap.add_argument("--cmdline"); ap.add_argument("--ramdisk"); ap.add_argument("--dtb")
+    ap.add_argument("--overlay", action="append", default=[])
     a = ap.parse_args()
     if a.kind == "selftest":
         sys.exit(0 if selftest(a.stock) else 1)
@@ -156,6 +169,9 @@ def main():
         img = build_boot(parse_boot(stock), kernel=None if a.kernel is None else rd(a.kernel),
                          ramdisk=ramdisk, cmdline=a.cmdline)
     else:
+        if a.overlay:
+            ramdisk = (ramdisk if ramdisk is not None else parse_vendor(stock)["vr"]) + newc(
+                (dest, 0o100755, rd(src)) for dest, src in (o.split("=", 1) for o in a.overlay))
         img = build_vendor(parse_vendor(stock), ramdisk=ramdisk, dtb=None if a.dtb is None else rd(a.dtb))
     open(a.out, "wb").write(img)
     print(f"{a.out}: {len(img)} bytes")

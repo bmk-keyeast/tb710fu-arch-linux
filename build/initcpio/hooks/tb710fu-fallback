@@ -1,0 +1,22 @@
+#!/usr/bin/ash
+run_hook() {
+	local wait=30 arg uuid i=0
+	for arg in $(cat /proc/cmdline); do
+		case "$arg" in tb710fu.wait=*) wait="${arg#tb710fu.wait=}" ;; esac
+	done
+	case "$root" in PARTUUID=*) uuid="${root#PARTUUID=}" ;; *) return 0 ;; esac
+	while [ ! -e "/dev/disk/by-partuuid/$uuid" ]; do
+		if [ "$i" -ge "$wait" ]; then
+			echo ":: tb710fu: root PARTUUID=$uuid not found after ${wait}s -> slot a"
+			# reboot even if qbootctl fails: slot b is never marked successful, so ABL's
+			# retry counter runs out and falls back to slot a by itself (no keyboard needed)
+			qbootctl -s a || echo ":: tb710fu: qbootctl failed, rebooting for ABL retry fallback"
+			sleep 3
+			reboot -f
+			return 0
+		fi
+		[ "$i" = 0 ] && echo ":: tb710fu: waiting up to ${wait}s for the root SSD"
+		sleep 1
+		i=$((i + 1))
+	done
+}

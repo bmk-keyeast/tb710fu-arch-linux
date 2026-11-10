@@ -132,38 +132,10 @@ EOF
 	log "initramfs fallback: no root SSD -> slot a"
 	# mkinitcpio hook: wait tb710fu.wait=N seconds (default 30) for the root partition;
 	# if it never shows up (SSD unplugged/dead) make slot a active and reboot into Android.
-	sudo mkdir -p "$R/etc/initcpio/install" "$R/etc/initcpio/hooks"
-	sudo tee "$R/etc/initcpio/install/tb710fu-fallback" >/dev/null <<'EOF'
-#!/bin/bash
-build() {
-	add_binary qbootctl
-	add_runscript
-}
-help() {
-	echo "Fall back to A/B slot a when the root device does not appear."
-}
-EOF
-	sudo tee "$R/etc/initcpio/hooks/tb710fu-fallback" >/dev/null <<'EOF'
-#!/usr/bin/ash
-run_hook() {
-	local wait=30 arg uuid i=0
-	for arg in $(cat /proc/cmdline); do
-		case "$arg" in tb710fu.wait=*) wait="${arg#tb710fu.wait=}" ;; esac
-	done
-	case "$root" in PARTUUID=*) uuid="${root#PARTUUID=}" ;; *) return 0 ;; esac
-	while [ ! -e "/dev/disk/by-partuuid/$uuid" ]; do
-		if [ "$i" -ge "$wait" ]; then
-			echo ":: tb710fu: root PARTUUID=$uuid not found after ${wait}s -> slot a"
-			qbootctl -s a && sleep 3 && reboot -f
-			echo ":: tb710fu: could not switch slot/reboot, continuing"
-			return 0
-		fi
-		[ "$i" = 0 ] && echo ":: tb710fu: waiting up to ${wait}s for the root SSD"
-		sleep 1
-		i=$((i + 1))
-	done
-}
-EOF
+	sudo install -Dm644 "$HERE/initcpio/install/tb710fu-fallback" "$R/etc/initcpio/install/tb710fu-fallback"
+	sudo install -Dm644 "$HERE/initcpio/hooks/tb710fu-fallback" "$R/etc/initcpio/hooks/tb710fu-fallback"
+
+	log "first boot: grow root, create /home"
 	# The SSD image only carries a small root partition (build.sh image); the disk size is
 	# known only on the device, so the rest is laid out on first boot.
 	printf 'ROOT_SIZE=%s\nHOME_PARTUUID=%s\n' "$ROOT_SIZE" "$HOME_PARTUUID" | sudo tee "$R/etc/tb710fu.conf" >/dev/null
@@ -299,7 +271,9 @@ print(avbinfo.parse(avbinfo.vbmeta_blob(open(sys.argv[2], "rb").read())[0])["rol
 		$py "$HERE/bootv4.py" boot "$S/boot_a.img" "$d/boot_b.img" \
 			--kernel "$KSRC/arch/arm64/boot/Image" --cmdline "$CMDLINE"
 		$py "$HERE/bootv4.py" vendor_boot "$S/vendor_boot_a.img" "$d/vendor_boot_b.img" \
-			--ramdisk "$OUT/initramfs.img" --dtb "$dtb"
+			--ramdisk "$OUT/initramfs.img" --dtb "$dtb" \
+			--overlay hooks/tb710fu-fallback="$HERE/initcpio/hooks/tb710fu-fallback"
+		# the overlay keeps the payload's fallback hook current without regenerating the initramfs (sudo)
 		# empty generic ramdisk: Android's first-stage init must not be appended over ours
 		$py "$HERE/bootv4.py" init_boot "$S/init_boot_a.img" "$d/init_boot_b.img" --ramdisk empty
 		local extra=""

@@ -1,0 +1,8 @@
+#!/bin/bash
+build() {
+	add_binary qbootctl
+	add_runscript
+}
+help() {
+	echo "Fall back to A/B slot a when the root device does not appear."
+}
