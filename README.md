@@ -2,6 +2,37 @@
 
 배경/설계: Obsidian `R&E/TB710FU 리눅스/` (00 MOC ~ 08)
 
+## 잠금 상태 부팅 재설계: GKI v4 (2026-11-10)
+
+**왜:** SpendyYT의 `deviceinfo`(header v2, `flash_method=fastboot`)는 언락 기기 기준. 잠긴 기기에 v2 boot_b를 넣었더니 ABL이 커널 시작 전에 슬롯 b를 부팅 불가로 표시하고 슬롯 a로 돌아감 (pstore에 Android 로그만 남음). 양산 펌웨어라 ABL 로그(`logfs`)는 비어 있음.
+
+**설계:** 순정 슬롯 a의 v4 이미지를 헤더 템플릿으로 쓰고 내용물만 교체 (`build/bootv4.py`, 순정 이미지 왕복 재조립 시 바이트 동일 확인)
+
+| 파티션 | 내용 |
+|---|---|
+| `boot_b` | v4, mainline `Image`(순정처럼 비압축) + cmdline, testkey 서명, 롤백 인덱스 순정값 |
+| `vendor_boot_b` | v4, 순정 헤더/cmdline/bootconfig 유지, DTB = mainline `sm8650-lenovo-tb710fu.dtb`(msm-id 0x2b8 / board-id 0x8 = 이 기기 MTP 보드), ramdisk = 우리 initramfs |
+| `init_boot_b` | v4, 빈 cpio (Android first-stage init이 덮어쓰지 않게) |
+| `vbmeta_b` | 슬롯 a vbmeta + vendor_boot/init_boot 해시 갱신 후 testkey 재서명 (`avbsign.py refresh`, 무변경 시 순정과 동일 descriptor 확인) |
+| 나머지 | 슬롯 a 사본 (`android/flash-slot-b.sh`가 페이로드 없는 파티션은 a에서 복사) |
+
+- 커널에 `CONFIG_BOOT_CONFIG=y` 추가: v4에서 ABL이 ramdisk 뒤에 bootconfig를 붙이므로
+- **진단 채널:** mainline DTS의 ramoops(`0xac300000`, 1MB)가 순정 Android와 같은 영역 → mainline이 조금이라도 돌면 Android 복귀 후 `/sys/fs/pstore`에 로그가 남음. `android/collect-boot-log.sh`(읽기 전용)로 모으고 `build/bootlog.py`로 판별
+
+**실험 페이로드** (`build.sh v4 e1|e2|e3`, 전부 오프라인 해시 대조 통과)
+
+| | 내용 | 확인하는 것 |
+|---|---|---|
+| **E2** | mainline v4 (위 표) | 본 시도. **2026-11-10 슬롯 b에 기록·재검증 완료** |
+| E3 | E2 + dtbo 0으로 채움 | 순정 오버레이가 mainline DTB에 적용 실패해서 막히는지 |
+| E1 | 순정 Android 커널 + `init=/없음 panic=5` | 슬롯 b 펌웨어 체인 + 서명 경로가 통과하는지 (유저공간 안 뜸 → 데이터 안전) |
+
+**테스트 절차**
+1. USB(이미지 기록됨)를 OTG로 연결 → KernelSU "Reboot to Linux"
+2. Linux가 뜨면 성공. Android로 돌아오면 adb 연결 → `collect-boot-log.sh` → `bootlog.py`로 판별
+   - mainline 로그 없음 → E3 → (그래도 없으면) E1
+   - mainline 로그 있음 → 어디서 멈췄는지 보고 커널/initramfs 쪽 수정
+
 ## 슬롯 상태 (2026-11-10, 루트 Android에서 읽기 전용 덤프, `out/dump-20261110/`)
 
 - 펌웨어 `ZUI_17.5.04.070 ROW`, 현재 슬롯 `_a`, 잠김(green), KernelSU 루트. EDL 프로그래머 없음 → **루트 Android에서 기록**

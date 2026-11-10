@@ -5,6 +5,8 @@
       append hash descriptor vbmeta + AVBf footer, pad IMAGE to PARTITION_SIZE
   avbsign.py rekey STOCK_VBMETA OUT KEY.pem PARTITION[,PARTITION...]
       copy vbmeta, point the named chain descriptors at KEY's public key, re-sign with KEY
+  avbsign.py refresh STOCK_VBMETA OUT KEY.pem part=IMAGE [...]
+      recompute the named hash descriptors (stock salt kept) from new images, re-sign with KEY
   avbsign.py selftest KEY.pem
 """
 import base64, hashlib, os, struct, sys
@@ -104,6 +106,31 @@ def raw_descriptors(blob):
     return h, out
 
 
+def refresh(stock, out, keypath, images):
+    """Copy vbmeta, recompute the hash descriptors of {partition: image_path} (stock salt kept), re-sign."""
+    key = load_key(keypath)
+    data = open(stock, "rb").read()
+    h, descs = raw_descriptors(data)
+    buf, hit = b"", set()
+    for tag, body in descs:
+        if tag == 2:
+            size, alg, nl, sl, dl, fl = struct.unpack(">Q32sIIII", body[:56])
+            name = body[116:116 + nl].decode()
+            if name in images:
+                salt = body[116 + nl:116 + nl + sl]
+                img = open(images[name], "rb").read()
+                digest = hashlib.new(alg.rstrip(b"\0").decode(), salt + img).digest()
+                body = struct.pack(">Q32sIIII", len(img), alg, nl, sl, len(digest), fl) + body[56:116] \
+                    + name.encode() + salt + digest
+                hit.add(name)
+        buf += descriptor(tag, body)
+    missing = set(images) - hit
+    if missing:
+        sys.exit(f"no hash descriptor for: {', '.join(sorted(missing))}")
+    blob = make_vbmeta(buf, key, rollback_index=h[16], flags=h[17], rollback_location=h[18])
+    open(out, "wb").write(blob + bytes(max(0, len(data) - len(blob))))
+
+
 def rekey(stock, out, keypath, names):
     key = load_key(keypath)
     data = open(stock, "rb").read()
@@ -190,6 +217,8 @@ if __name__ == "__main__":
         footer(a[0], int(a[1]), int(a[2]), a[3], *(a[4:5]))
     elif cmd == "rekey":
         rekey(a[0], a[1], a[2], a[3].split(","))
+    elif cmd == "refresh":   # refresh STOCK_VBMETA OUT KEY part=image [part=image...]
+        refresh(a[0], a[1], a[2], dict(x.split("=", 1) for x in a[3:]))
     elif cmd == "verify":
         n = load_key(a[1])[0]
         print("OK" if verify(a[0], n) else "BAD")
