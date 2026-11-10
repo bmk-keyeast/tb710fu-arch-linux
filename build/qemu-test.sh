@@ -35,8 +35,9 @@ open('$W/Image','wb').write(bootv4.parse_boot(bootv4.strip_footer(open('$P/boot_
 
 DISK=()
 if [ "$CASE" = disk ]; then
-	[ -f $W/disk.img ] || { xz -dc $T/out/tb710fu-ssd.img.xz > $W/disk.img; truncate -s 31G $W/disk.img; }
-	DISK=(-drive file=$W/disk.img,format=raw,if=virtio)
+	D=${DISK_IMG:-$W/disk.img}
+	[ -f $D ] || { xz -dc $T/out/tb710fu-ssd.img.xz > $D; truncate -s 31G $D; }
+	DISK=(-drive file=$D,format=raw,if=virtio)
 fi
 echo "cmdline: $CMD"
 timeout ${TIMEOUT:-1500} $Q/usr/bin/qemu-system-aarch64 -M virt -cpu max -smp 4 -m 3072 -nographic \

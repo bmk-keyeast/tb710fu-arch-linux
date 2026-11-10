@@ -1,0 +1,40 @@
+#!/bin/sh
+# Grow the root partition to ROOT_SIZE (at most half the disk) and turn the rest of the disk into /home.
+set -eu
+. /etc/tb710fu.conf
+home=/dev/disk/by-partuuid/$HOME_PARTUUID
+root=$(findmnt -no SOURCE /)
+disk=/dev/$(lsblk -no PKNAME "$root")
+if [ ! -e "$home" ]; then
+	# e.g. a 32GB stick: ~15G root / ~15G home; never smaller than the root already is
+	disk_mib=$(( $(blockdev --getsize64 "$disk") / 1048576 ))
+	cur_mib=$(( $(blockdev --getsize64 "$root") / 1048576 ))
+	want_mib=$(( $(numfmt --from=iec "$ROOT_SIZE") / 1048576 ))
+	[ "$want_mib" -gt $((disk_mib / 2)) ] && want_mib=$((disk_mib / 2))
+	[ "$want_mib" -lt "$cur_mib" ] && want_mib=$cur_mib
+	start=$(cat "/sys/class/block/${root##*/}/start")
+	# blkid reads the GPT itself; lsblk needs the udev db, which is empty this early in boot
+	ruuid=$(blkid -s PARTUUID -o value "$root")
+	# a table written without the root's PARTUUID would get a random one -> root= no longer matches
+	[ -n "$ruuid" ] && [ -n "$start" ] || { echo "root PARTUUID/start unknown, not touching the GPT"; exit 1; }
+	# One sfdisk call rewrites the whole GPT: root keeps its start and PARTUUID (data untouched),
+	# the backup header lands at the real end of the disk, /home takes the rest. Separate
+	# relocate/resize/append calls raced udev re-probing the disk between them.
+	udevadm settle
+	printf '%s\n' "label: gpt" "label-id: $(sfdisk --disk-id "$disk")" \
+		"start=$start, size=${want_mib}MiB, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, uuid=$ruuid, name=tb710fu-root" \
+		"type=933AC7E1-2EB4-4F13-B844-0E14E2AEF915, uuid=$HOME_PARTUUID, name=tb710fu-home" |
+		sfdisk --no-reread --force "$disk"
+	partx -u "$disk"
+	udevadm settle
+	resize2fs "$root"
+	mkfs.ext4 -F -L tb710fu-home "$home"
+	# carry over the home directories created at build time
+	mnt=$(mktemp -d)
+	mount "$home" "$mnt"
+	cp -a /home/. "$mnt"/
+	umount "$mnt"
+	rmdir "$mnt"
+fi
+mkdir -p /var/lib/tb710fu
+touch /var/lib/tb710fu/firstboot-done

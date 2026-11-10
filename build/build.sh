@@ -139,42 +139,7 @@ EOF
 	# The SSD image only carries a small root partition (build.sh image); the disk size is
 	# known only on the device, so the rest is laid out on first boot.
 	printf 'ROOT_SIZE=%s\nHOME_PARTUUID=%s\n' "$ROOT_SIZE" "$HOME_PARTUUID" | sudo tee "$R/etc/tb710fu.conf" >/dev/null
-	sudo tee "$R/usr/bin/tb710fu-firstboot" >/dev/null <<'EOF'
-#!/bin/sh
-# Grow the root partition to ROOT_SIZE and turn the rest of the disk into /home.
-set -eu
-. /etc/tb710fu.conf
-home=/dev/disk/by-partuuid/$HOME_PARTUUID
-root=$(findmnt -no SOURCE /)
-disk=/dev/$(lsblk -no PKNAME "$root")
-if [ ! -e "$home" ]; then
-	# the image was written to a bigger disk: move the backup GPT to the real end first
-	sfdisk --relocate gpt-bak-std "$disk"
-	# root gets ROOT_SIZE, but at most half the disk (e.g. a 32GB stick: ~15G / ~15G),
-	# and never less than it already is
-	disk_mib=$(( $(blockdev --getsize64 "$disk") / 1048576 ))
-	cur_mib=$(( $(blockdev --getsize64 "$root") / 1048576 ))
-	want_mib=$(( $(numfmt --from=iec "$ROOT_SIZE") / 1048576 ))
-	[ "$want_mib" -gt $((disk_mib / 2)) ] && want_mib=$((disk_mib / 2))
-	[ "$want_mib" -lt "$cur_mib" ] && want_mib=$cur_mib
-	echo ", ${want_mib}MiB" | sfdisk --no-reread --force -N 1 "$disk"
-	echo "type=933AC7E1-2EB4-4F13-B844-0E14E2AEF915, uuid=$HOME_PARTUUID, name=tb710fu-home" |
-		sfdisk --no-reread --force --append "$disk"
-	partx -u "$disk"
-	resize2fs "$root"
-	udevadm settle
-	mkfs.ext4 -F -L tb710fu-home "$home"
-	# carry over the home directories created at build time
-	mnt=$(mktemp -d)
-	mount "$home" "$mnt"
-	cp -a /home/. "$mnt"/
-	umount "$mnt"
-	rmdir "$mnt"
-fi
-mkdir -p /var/lib/tb710fu
-touch /var/lib/tb710fu/firstboot-done
-EOF
-	sudo chmod 755 "$R/usr/bin/tb710fu-firstboot"
+	sudo install -Dm755 "$HERE/rootfs-files/tb710fu-firstboot" "$R/usr/bin/tb710fu-firstboot"
 	sudo tee "$R/etc/systemd/system/tb710fu-firstboot.service" >/dev/null <<'EOF'
 [Unit]
 Description=TB710FU first boot: grow root, create /home
