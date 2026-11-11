@@ -198,6 +198,10 @@ mkdir -p /etc/systemd/logind.conf.d
 printf '[Login]\nHandleLidSwitch=ignore\nHandleLidSwitchExternalPower=ignore\nHandleLidSwitchDocked=ignore\n' > /etc/systemd/logind.conf.d/10-tb710fu-lid.conf
 # deep suspend does not come back on this kernel yet (Wi-Fi, SSH and the display stay dead)
 systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
+# no idle display-off / lock: turning the DSI panel back on (DPMS) silently reset the tablet once
+mkdir -p /etc/xdg
+printf '[Daemon]\nAutolock=false\nLockOnResume=false\n' > /etc/xdg/kscreenlockerrc
+for g in AC Battery LowBattery; do printf '[%s][Display]\nDimDisplayWhenIdle=false\nTurnOffDisplayWhenIdle=false\n\n[%s][SuspendAndShutdown]\nAutoSuspendAction=0\n\n' \$g \$g; done > /etc/xdg/powerdevilrc
 rm -rf /var/cache/pacman/pkg/*
 # host (x86) depmod leaves modules.dep empty for these aarch64 .ko.gz
 depmod $(kver)
