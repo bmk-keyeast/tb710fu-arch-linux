@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pure-Python AVB signing for TB710FU (SHA256_RSA4096, PKCS#1 v1.5). No deps.
 
-  avbsign.py footer IMAGE PARTITION_SIZE ROLLBACK_INDEX KEY.pem [NAME]
+  avbsign.py footer IMAGE PARTITION_SIZE ROLLBACK_INDEX KEY.pem [NAME] [--props-from STOCK_IMAGE]
       append hash descriptor vbmeta + AVBf footer, pad IMAGE to PARTITION_SIZE
   avbsign.py rekey STOCK_VBMETA OUT KEY.pem PARTITION[,PARTITION...]
       copy vbmeta, point the named chain descriptors at KEY's public key, re-sign with KEY
@@ -151,14 +151,24 @@ def rekey(stock, out, keypath, names):
     open(out, "wb").write(blob + bytes(max(0, len(data) - len(blob))))
 
 
-def footer(image, psize, rollback_index, keypath, name="boot"):
+def stock_properties(path):
+    """Property descriptors (raw) of an image's vbmeta, e.g. com.android.build.boot.os_version."""
+    blob, _ = avbinfo.vbmeta_blob(open(path, "rb").read())
+    return b"".join(descriptor(0, body) for tag, body in raw_descriptors(blob)[1] if tag == 0)
+
+
+def footer(image, psize, rollback_index, keypath, name="boot", props_from=None):
+    """props_from: copy the stock image's property descriptors. Qualcomm ABL reads
+    com.android.build.boot.os_version / security_patch from the boot vbmeta and, without them,
+    falls back to the header os_version; GKI v4 headers carry 0 there -> boot refused."""
     key = load_key(keypath)
     img = open(image, "rb").read()
     salt = os.urandom(32)
     digest = hashlib.sha256(salt + img).digest()
     hd = struct.pack(">Q32sIIII", len(img), b"sha256", len(name), 32, 32, 0) + bytes(60)
     hd += name.encode() + salt + digest
-    vb = make_vbmeta(descriptor(2, hd), key, rollback_index=rollback_index)
+    descs = descriptor(2, hd) + (stock_properties(props_from) if props_from else b"")
+    vb = make_vbmeta(descs, key, rollback_index=rollback_index)
     body = pad(img, 4096)
     foot = struct.pack(">4sIIQQQ", b"AVBf", 1, 0, len(img), len(body), len(vb)).ljust(64, b"\0")
     total = len(body) + len(pad(vb, 4096)) + 4096
@@ -213,8 +223,10 @@ def selftest(keypath):
 
 if __name__ == "__main__":
     cmd, a = sys.argv[1], sys.argv[2:]
-    if cmd == "footer":
-        footer(a[0], int(a[1]), int(a[2]), a[3], *(a[4:5]))
+    if cmd == "footer":   # footer IMAGE PSIZE RI KEY [NAME] [--props-from STOCK_IMAGE]
+        props = a[a.index("--props-from") + 1] if "--props-from" in a else None
+        pos = [x for i, x in enumerate(a) if x != "--props-from" and (i == 0 or a[i - 1] != "--props-from")]
+        footer(pos[0], int(pos[1]), int(pos[2]), pos[3], *(pos[4:5]), props_from=props)
     elif cmd == "rekey":
         rekey(a[0], a[1], a[2], a[3].split(","))
     elif cmd == "refresh":   # refresh STOCK_VBMETA OUT KEY part=image [part=image...]

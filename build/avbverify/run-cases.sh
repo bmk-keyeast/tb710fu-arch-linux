@@ -19,13 +19,13 @@ slot() {  # slot NAME PAYLOAD_DIR_OR_- [boot override file]
 	done
 	for fl in "" "$FLOORS"; do
 		printf '%-34s floors=%-28s ' "$name" "${fl:-0}"
-		$H $d _b $KEY $fl | head -1
+		$H $d _b $KEY $fl | grep "^RESULT"
 	done
 	[ -n "${VERBOSE:-}" ] && $H $d _b $KEY $FLOORS | tail -n +2
 	rm -rf $d
 }
 
-printf '%-34s floors=%-28s ' "stock slot a (control)" "$FLOORS"; $H "$DUMP" _a $KEY $FLOORS | head -1
+printf '%-34s floors=%-28s ' "stock slot a (control)" "$FLOORS"; $H "$DUMP" _a $KEY $FLOORS | grep "^RESULT"
 slot "v2 boot (rejected 11-10)" - "$OUT/../out/boot-signed.img"
 slot "E1 stock kernel baseline" $OUT/v4/e1
 VERBOSE=1 slot "E2 mainline v4" $OUT/v4/e2

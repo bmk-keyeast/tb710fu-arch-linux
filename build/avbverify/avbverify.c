@@ -81,6 +81,37 @@ static AvbIOResult get_unique_guid_for_partition(AvbOps* ops, const char* part, 
   return AVB_IO_RESULT_OK;
 }
 
+/* Qualcomm ABL GetOsVerAndSecPactchLevel(): os_version/security_patch from the boot chain vbmeta
+ * (else vbmeta), falling back to the boot header os_version (offset 0x2c, v3/v4: 0x10); 0 -> refuse. */
+static int abl_os_version_check(AvbSlotVerifyData* data) {
+  size_t idx = 0, n;
+  for (size_t i = 1; i < data->num_vbmeta_images; i++)
+    if (strcmp(data->vbmeta_images[i].partition_name, "boot") == 0) idx = i;
+  const char* os = avb_property_lookup(data->vbmeta_images[idx].vbmeta_data,
+                                       data->vbmeta_images[idx].vbmeta_size,
+                                       "com.android.build.boot.os_version", 0, &n);
+  const char* spl = avb_property_lookup(data->vbmeta_images[idx].vbmeta_data,
+                                        data->vbmeta_images[idx].vbmeta_size,
+                                        "com.android.build.boot.security_patch", 0, &n);
+  if (os && spl) {
+    printf("ABL os_version check: footer os_version=%s security_patch=%s -> OK\n", os, spl);
+    return 0;
+  }
+  for (size_t i = 0; i < data->num_loaded_partitions; i++) {
+    AvbPartitionData* p = &data->loaded_partitions[i];
+    if (strcmp(p->partition_name, "boot") != 0 || p->data_size < 48) continue;
+    uint32_t ver, raw;
+    memcpy(&ver, p->data + 40, 4);
+    memcpy(&raw, p->data + (ver >= 3 ? 16 : 44), 4);
+    printf("ABL os_version check: footer props %s, header v%u os_version=0x%x -> %s\n",
+           os ? "partial" : "missing", ver, raw,
+           raw ? "OK" : "REFUSED (\"Boot image header OS version == 0\")");
+    return raw ? 0 : 1;
+  }
+  printf("ABL os_version check: boot not loaded -> REFUSED\n");
+  return 1;
+}
+
 int main(int argc, char** argv) {
   if (argc < 4) {
     fprintf(stderr, "usage: avbverify DIR SUFFIX TRUSTED_KEY.bin [floors...]\n");
@@ -108,7 +139,9 @@ int main(int argc, char** argv) {
   AvbSlotVerifyData* data = NULL;
   AvbSlotVerifyResult r = avb_slot_verify(&ops, requested, argv[2], AVB_SLOT_VERIFY_FLAGS_NONE,
                                           AVB_HASHTREE_ERROR_MODE_RESTART_AND_INVALIDATE, &data);
-  printf("RESULT %s\n", avb_slot_verify_result_to_string(r));
+  int abl_ok = r == AVB_SLOT_VERIFY_RESULT_OK && data && abl_os_version_check(data) == 0;
+  printf("RESULT %s%s\n", avb_slot_verify_result_to_string(r),
+         r == AVB_SLOT_VERIFY_RESULT_OK && !abl_ok ? " but ABL_OS_VERSION_REFUSED" : "");
   if (data) {
     for (size_t i = 0; i < data->num_vbmeta_images; i++)
       printf("  vbmeta %-16s verify=%d\n", data->vbmeta_images[i].partition_name,
@@ -121,5 +154,5 @@ int main(int argc, char** argv) {
                                             (unsigned long long)data->rollback_indexes[i]);
     avb_slot_verify_data_free(data);
   }
-  return r == AVB_SLOT_VERIFY_RESULT_OK ? 0 : 1;
+  return abl_ok ? 0 : 1;
 }

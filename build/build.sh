@@ -271,7 +271,8 @@ print(avbinfo.parse(avbinfo.vbmeta_blob(open(sys.argv[2], "rb").read())[0])["rol
 		;;
 	*) die "v4 e1|e1big|e2|e3" ;;
 	esac
-	$py "$HERE/avbsign.py" footer "$d/boot_b.img" "$psize" "$ri" "$key"
+	# stock os_version/security_patch properties: ABL refuses a boot vbmeta without them (header os_version is 0)
+	$py "$HERE/avbsign.py" footer "$d/boot_b.img" "$psize" "$ri" "$key" --props-from "$S/boot_a.img"
 	[ "$($py "$HERE/avbsign.py" verify "$d/boot_b.img" "$key")" = OK ] || die "boot_b verify failed"
 	(cd "$d" && sha256sum *.img > SHA256SUMS)
 	log "out/v4/$mode: $(ls "$d" | tr '\n' ' ')(boot rollback index $ri)"
@@ -316,7 +317,7 @@ print(v["pubkey_sha1"], c[0] if c else "none", b["rollback_index"])' "$HERE" "$v
 	[ "$boot_chain" != none ] || die "vbmeta has no 'boot' chain descriptor: layout not handled"
 
 	cp "$OUT/boot.img" "$OUT/boot-signed.img"
-	$py "$HERE/avbsign.py" footer "$OUT/boot-signed.img" "$(stat -c %s "$stock")" "$ri" "$key"
+	$py "$HERE/avbsign.py" footer "$OUT/boot-signed.img" "$(stat -c %s "$stock")" "$ri" "$key" --props-from "$stock"
 	[ "$($py "$HERE/avbsign.py" verify "$OUT/boot-signed.img" "$key")" = OK ] || die "boot-signed.img verify failed"
 	log "out/boot-signed.img (rollback index $ri)"
 
