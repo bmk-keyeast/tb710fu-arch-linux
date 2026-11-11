@@ -221,7 +221,7 @@ v4() {
 	#   v4 e1   stock Android kernel, init=/nonexistent panic=5 -> proves ABL accepts slot b (no userspace)
 	#   v4 e2   mainline kernel + DTB + our initramfs
 	#   v4 e2b  e2 with the DTB's qcom,board-id = <0 0> like the stock base DTBs
-	#   v4 e3   e2 + zeroed dtbo + board-id <8 0x600>: a failed stock-overlay apply leaves no DTB at
+	#   v4 e3   e2 + zeroed dtbo + board-id <8 0, 8 0x600>: a failed stock-overlay apply leaves no DTB at
 	#           the load address (ApplyOverlay copies only on success) -> UpdateDeviceTree fails ->
 	#           fastboot; an invalid dtbo makes ABL copy our DTB itself (appended-DT path)
 	#   v4 e1big  e1 + 64 MiB vendor ramdisk filler (does ABL load a big vendor ramdisk?)
@@ -257,6 +257,13 @@ print(avbinfo.parse(avbinfo.vbmeta_blob(open(sys.argv[2], "rb").read())[0])["rol
 		"$KSRC/scripts/dtc/dtc" -q -I dtb -O dts -o "$d/tb710fu.dts" \
 			"$KSRC/arch/arm64/boot/dts/qcom/sm8650-lenovo-tb710fu.dtb"
 		printf '\n/ {\n\tsoc@0 {\n\t\tcache-controller {\n\t\t};\n\t};\n};\n' >> "$d/tb710fu.dts"
+		if [ "$mode" = e3 ]; then
+			# with dtbo invalid, ABL takes the appended-DT path (DeviceTreeAppended), which needs an
+			# absolute match: MTP(8), subtype 0, HLOS DDR bits (subtype & 0x700) == DdrType<<8.
+			# Board.c BoardDdrType() leaves DdrType 0 above 4 GiB (8 GiB here); 0x600 (4 GiB) kept
+			# as a second entry in case Lenovo's ABL differs - each board-id entry is matched alone
+			printf '\n/ {\n\tqcom,board-id = <8 0>, <8 0x600>;\n};\n' >> "$d/tb710fu.dts"
+		fi
 		"$KSRC/scripts/dtc/dtc" -q -I dts -O dtb -o "$dtb" "$d/tb710fu.dts"
 		rm -f "$d/tb710fu.dts"
 		$py "$HERE/dtcheck.py" "$dtb" || die "DTB lacks a node ABL requires"
@@ -264,11 +271,6 @@ print(avbinfo.parse(avbinfo.vbmeta_blob(open(sys.argv[2], "rb").read())[0])["rol
 			# stock base DTBs all use board-id <0 0> (default match); the MTP id lives in dtbo
 			$py "$HERE/dtbprop.py" "$dtb" "$d/board0.dtb" qcom,board-id 0 0
 			dtb="$d/board0.dtb"
-		elif [ "$mode" = e3 ]; then
-			# with dtbo invalid, ABL takes the appended-DT path (DeviceTreeAppended), which needs an
-			# absolute match: MTP(8), subtype 0, HLOS DDR bits = DDRTYPE_4096MB(6)<<8 for >4 GiB RAM
-			$py "$HERE/dtbprop.py" "$dtb" "$d/board600.dtb" qcom,board-id 8 0x600
-			dtb="$d/board600.dtb"
 		fi
 		$py "$HERE/bootv4.py" boot "$S/boot_a.img" "$d/boot_b.img" \
 			--kernel "$KSRC/arch/arm64/boot/Image" --cmdline "$CMDLINE"

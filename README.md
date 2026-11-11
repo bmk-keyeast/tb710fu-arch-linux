@@ -24,7 +24,7 @@
 | | 내용 | 확인하는 것 |
 |---|---|---|
 | **E2** | mainline v4 (위 표) | 본 시도. **2026-11-10 슬롯 b에 기록·재검증 완료** |
-| E3 | E2 + dtbo 0으로 채움 + board-id `<8 0x600>` | E2가 fastboot로 떨어진 원인 대응: ABL `ApplyOverlay`는 오버레이 **성공 시에만** DTB를 로드 주소로 복사 → 순정 dtbo가 mainline DTB에 적용 실패하면 DT 없음 → `UpdateDeviceTree` 실패. dtbo magic이 무효면 `DeviceTreeAppended`가 DTB를 직접 복사(엄격 매칭: MTP 8, subtype 0, DDR 비트 0x600) |
+| E3 | E2 + dtbo 0으로 채움 + board-id `<8 0>, <8 0x600>` | E2가 fastboot로 떨어진 원인 대응: ABL `ApplyOverlay`는 오버레이 **성공 시에만** DTB를 로드 주소로 복사 → 순정 dtbo가 mainline DTB에 적용 실패하면 DT 없음 → `UpdateDeviceTree` 실패. dtbo magic이 무효면 `DeviceTreeAppended`가 DTB를 직접 복사(엄격 매칭: MTP 8, subtype 0, DDR 비트 = RAM 4GB 초과면 0) |
 | E1 | 순정 Android 커널 + `init=/없음 panic=5` | 슬롯 b 펌웨어 체인 + 서명 경로가 통과하는지 (유저공간 안 뜸 → 데이터 안전) |
 
 **오프라인 검증 (기기 없이, 2026-11-10 밤)**
