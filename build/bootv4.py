@@ -8,12 +8,12 @@ only the payloads are swapped.
   bootv4.py boot        STOCK_BOOT OUT [--kernel F] [--cmdline S]
   bootv4.py init_boot   STOCK_INIT_BOOT OUT --ramdisk F          (use 'empty' for an empty cpio)
   bootv4.py vendor_boot STOCK_VENDOR_BOOT OUT [--ramdisk F] [--dtb F] [--overlay DEST=SRC ...]
-      --overlay appends a root-owned cpio after the ramdisk; the kernel unpacks it last, so DEST
-      (e.g. hooks/tb710fu-fallback) replaces the same path from the ramdisk
+      --overlay appends a root-owned gzip cpio after the ramdisk; the kernel unpacks it last, so
+      DEST (e.g. hooks/tb710fu-fallback) replaces the same path from the ramdisk
   bootv4.py selftest    DUMP_DIR      (rebuild stock a-slot images from their own parts, compare)
 Output is the bare image (no AVB footer, no padding); sign/footer with avbsign.py.
 """
-import argparse, os, struct, sys
+import argparse, gzip, os, struct, sys
 
 PAGE = 4096
 
@@ -172,8 +172,15 @@ def main():
         if a.overlay:
             # the kernel only recognises an appended raw cpio at a 4-byte aligned offset;
             # zero padding between archives is skipped
-            ramdisk = pad(ramdisk if ramdisk is not None else parse_vendor(stock)["vr"], 512) + newc(
-                (dest, 0o100755, rd(src)) for dest, src in (o.split("=", 1) for o in a.overlay))
+            files = [o.split("=", 1) for o in a.overlay]
+            # parent dirs first: the kernel's unpacker does not create missing directories
+            # (an entry for a dir that already exists is harmless)
+            dirs = sorted({os.path.dirname(d)[:i] for d, _ in files
+                           for i in [j for j, c in enumerate(os.path.dirname(d) + "/") if c == "/"] if i})
+            # gzip: the ADSP firmware alone is 35 MB; the kernel unpacks compressed archives too
+            ramdisk = pad(ramdisk if ramdisk is not None else parse_vendor(stock)["vr"], 512) + gzip.compress(
+                newc([(d, 0o40755, b"") for d in dirs] + [(dest, 0o100755, rd(src)) for dest, src in files]),
+                9, mtime=0)
         img = build_vendor(parse_vendor(stock), ramdisk=ramdisk, dtb=None if a.dtb is None else rd(a.dtb))
     open(a.out, "wb").write(img)
     print(f"{a.out}: {len(img)} bytes")

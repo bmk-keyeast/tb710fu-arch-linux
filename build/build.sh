@@ -165,9 +165,9 @@ PARTUUID=$HOME_PARTUUID  /home  ext4  rw,relatime,nofail,x-systemd.device-timeou
 EOF
 	# no autodetect: it would probe the build host
 	sudo tee "$R/etc/mkinitcpio-tb710fu.conf" >/dev/null <<'EOF'
-MODULES=()
+MODULES=(qcom_q6v5_pas)
 BINARIES=()
-FILES=()
+FILES=(/usr/lib/firmware/qcom/sm8650/xiaoxin/gt/adsp.mbn /usr/lib/firmware/qcom/sm8650/xiaoxin/gt/adsp_dtb.mbn)
 HOOKS=(base udev modconf block tb710fu-fallback filesystems fsck)
 COMPRESSION="zstd"
 EOF
@@ -274,10 +274,21 @@ print(avbinfo.parse(avbinfo.vbmeta_blob(open(sys.argv[2], "rb").read())[0])["rol
 		fi
 		$py "$HERE/bootv4.py" boot "$S/boot_a.img" "$d/boot_b.img" \
 			--kernel "$KSRC/arch/arm64/boot/Image" --cmdline "$CMDLINE"
+		# USB-C host mode comes from pmic_glink, i.e. from the ADSP: without its remoteproc driver
+		# and firmware in the initramfs dwc3 stays a peripheral and the root USB disk never shows up
+		local m="$R/usr/lib/modules/$(kver)" f fw="usr/lib/firmware/qcom/sm8650/xiaoxin/gt" ov=()
+		for f in $(sed -n 's|^kernel/drivers/remoteproc/qcom_q6v5_pas.ko[^:]*: ||p' "$m/modules.dep") \
+			kernel/drivers/remoteproc/qcom_q6v5_pas.ko.gz modules.dep modules.dep.bin modules.alias \
+			modules.alias.bin modules.softdep modules.symbols modules.symbols.bin modules.builtin \
+			modules.builtin.bin modules.builtin.alias.bin; do
+			[ -r "$m/$f" ] || die "missing $m/$f"
+			ov+=(--overlay "usr/lib/modules/$(kver)/$f=$m/$f")
+		done
+		for f in adsp.mbn adsp_dtb.mbn; do ov+=(--overlay "$fw/$f=$R/$fw/$f"); done
 		$py "$HERE/bootv4.py" vendor_boot "$S/vendor_boot_a.img" "$d/vendor_boot_b.img" \
-			--ramdisk "$OUT/initramfs.img" --dtb "$dtb" \
+			--ramdisk "$OUT/initramfs.img" --dtb "$dtb" "${ov[@]}" \
 			--overlay hooks/tb710fu-fallback="$HERE/initcpio/hooks/tb710fu-fallback"
-		# the overlay keeps the payload's fallback hook current without regenerating the initramfs (sudo)
+		# the overlays keep the payload current without regenerating the initramfs (sudo)
 		# empty generic ramdisk: Android's first-stage init must not be appended over ours
 		$py "$HERE/bootv4.py" init_boot "$S/init_boot_a.img" "$d/init_boot_b.img" --ramdisk empty
 		local extra=""

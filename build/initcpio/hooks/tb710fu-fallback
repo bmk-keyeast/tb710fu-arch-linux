@@ -1,22 +1,31 @@
 #!/usr/bin/ash
+# to the console and the kernel log (the kernel log survives a reboot in pstore/ramoops)
+tb_log() {
+	echo ":: tb710fu: $*"
+	echo "<5>tb710fu: $*" > /dev/kmsg 2>/dev/null
+}
+
 run_hook() {
 	local wait=30 arg uuid i=0
 	for arg in $(cat /proc/cmdline); do
 		case "$arg" in tb710fu.wait=*) wait="${arg#tb710fu.wait=}" ;; esac
 	done
 	case "$root" in PARTUUID=*) uuid="${root#PARTUUID=}" ;; *) return 0 ;; esac
+	# the ADSP (pmic_glink) switches USB-C to host mode; udev usually loads this already
+	if modprobe -a qcom_q6v5_pas; then tb_log "ADSP remoteproc driver loaded"; else tb_log "ADSP remoteproc driver failed"; fi
 	while [ ! -e "/dev/disk/by-partuuid/$uuid" ]; do
 		if [ "$i" -ge "$wait" ]; then
-			echo ":: tb710fu: root PARTUUID=$uuid not found after ${wait}s -> slot a"
+			tb_log "root PARTUUID=$uuid not found after ${wait}s -> slot a ($(ls /sys/bus/usb/devices 2>/dev/null | tr '\n' ' '))"
 			# reboot even if qbootctl fails: slot b is never marked successful, so ABL's
 			# retry counter runs out and falls back to slot a by itself (no keyboard needed)
-			qbootctl -s a || echo ":: tb710fu: qbootctl failed, rebooting for ABL retry fallback"
+			qbootctl -s a || tb_log "qbootctl failed, rebooting for ABL retry fallback"
 			sleep 3
 			reboot -f
 			return 0
 		fi
-		[ "$i" = 0 ] && echo ":: tb710fu: waiting up to ${wait}s for the root SSD"
+		[ "$i" = 0 ] && tb_log "waiting up to ${wait}s for the root disk"
 		sleep 1
 		i=$((i + 1))
 	done
+	tb_log "root disk found after ${i}s"
 }
