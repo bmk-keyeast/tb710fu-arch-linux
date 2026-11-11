@@ -5,6 +5,8 @@ For when WSL cannot attach the disk: read/modify the image with debugfs in WSL i
   ext4grab.py \\\\.\\PhysicalDrive1 PARTNO OUT.img     sparse image (NTFS: 64 KiB allocation units!)
   ext4grab.py \\\\.\\PhysicalDrive1 PARTNO OUT.pack    used blocks back to back + (offset, length)
   ext4grab.py unpack OUT.pack IMG                     pack -> sparse image (run in WSL, 4 KiB holes)
+  ext4grab.py diff ORIG.img EDITED.img OUT.pack      changed blocks of an offline (debugfs -w) edit
+  ext4grab.py apply \\\\.\\PhysicalDrive1 PARTNO OUT.pack   write them back (refuses if the fs moved on)
 Unused blocks are left as holes (zeros). Scattered 4 KiB blocks cost 64 KiB each in an NTFS sparse
 file, so use .pack on Windows and unpack it on a Linux filesystem.
 """
@@ -89,6 +91,45 @@ def main(disk, partno, out):
     print(f"\n{out} done")
 
 
+def diff(orig, new, out):
+    """Pack of the 4 KiB blocks that differ (offline edits made with debugfs -w on a copy).
+    OUT.sb keeps the original first block so apply can refuse a disk that changed since."""
+    blk, n = 4096, 0
+    with open(orig, "rb") as a, open(new, "rb") as b, open(out, "wb") as o:
+        size = os.fstat(b.fileno()).st_size
+        o.write(struct.pack("<Q", size))
+        a.seek(0); open(out + ".sb", "wb").write(a.read(blk))
+        pos = 0
+        while pos < size:
+            a.seek(pos); b.seek(pos)
+            x, y = a.read(CHUNK), b.read(CHUNK)
+            x += b"\0" * (len(y) - len(x))
+            if x != y:
+                for i in range(0, len(y), blk):
+                    if x[i:i + blk] != y[i:i + blk]:
+                        o.write(struct.pack("<QQ", pos + i, blk) + y[i:i + blk]); n += 1
+            pos += CHUNK
+    print(f"{out}: {n} changed blocks")
+
+
+def apply(disk, partno, pack):
+    """Write a diff pack onto the partition (Windows, admin), refusing if the fs changed since."""
+    with open(disk, "r+b", buffering=0) as f, open(pack, "rb") as p:
+        base, size = gpt_part(f, int(partno))
+        f.seek(base)
+        if f.read(4096) != open(pack + ".sb", "rb").read():
+            sys.exit("partition changed since it was copied - refusing")
+        p.read(8); n = 0
+        while h := p.read(16):
+            off, k = struct.unpack("<QQ", h); d = p.read(k)
+            assert off + k <= size and k % 4096 == 0
+            f.seek(base + off); f.write(d); f.seek(base + off)
+            if f.read(k) != d:
+                sys.exit(f"readback mismatch at {off}")
+            n += 1
+    print(f"applied {n} blocks to partition {partno}")
+
+
 def unpack(pack, img):
     with open(pack, "rb") as p, open(img, "wb") as o:
         o.truncate(struct.unpack("<Q", p.read(8))[0])
@@ -101,4 +142,5 @@ def unpack(pack, img):
 
 
 if __name__ == "__main__":
-    unpack(*sys.argv[2:4]) if sys.argv[1] == "unpack" else main(*sys.argv[1:4])
+    cmd = {"unpack": unpack, "diff": diff, "apply": apply}.get(sys.argv[1])
+    cmd(*sys.argv[2:]) if cmd else main(*sys.argv[1:4])

@@ -29,6 +29,11 @@ printf '[Login]\nHandleLidSwitch=ignore\nHandleLidSwitchExternalPower=ignore\nHa
 	> $M/etc/systemd/logind.conf.d/10-tb710fu-lid.conf
 chmod 644 $M/etc/systemd/logind.conf.d/10-tb710fu-lid.conf
 cat $M/etc/systemd/logind.conf.d/10-tb710fu-lid.conf
+# SDDM: no Xorg holding DRM master for the autologin Wayland session
+printf '[General]\nDisplayServer=wayland\nGreeterEnvironment=QT_WAYLAND_SHELL_INTEGRATION=layer-shell\n\n[Wayland]\nCompositorCommand=kwin_wayland --drm --no-lockscreen --no-global-shortcuts --locale1\n' \
+	> $M/etc/sddm.conf.d/10-wayland.conf
+chmod 644 $M/etc/sddm.conf.d/10-wayland.conf
+cat $M/etc/sddm.conf.d/10-wayland.conf
 # ---
 
 sync; umount $M && echo "DONE $(date)" || echo "umount FAILED"
