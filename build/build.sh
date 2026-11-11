@@ -221,7 +221,9 @@ v4() {
 	#   v4 e1   stock Android kernel, init=/nonexistent panic=5 -> proves ABL accepts slot b (no userspace)
 	#   v4 e2   mainline kernel + DTB + our initramfs
 	#   v4 e2b  e2 with the DTB's qcom,board-id = <0 0> like the stock base DTBs
-	#   v4 e3   e2 + zeroed dtbo (in case ABL fails applying stock overlays to the mainline DTB)
+	#   v4 e3   e2 + zeroed dtbo + board-id <8 0x600>: a failed stock-overlay apply leaves no DTB at
+	#           the load address (ApplyOverlay copies only on success) -> UpdateDeviceTree fails ->
+	#           fastboot; an invalid dtbo makes ABL copy our DTB itself (appended-DT path)
 	#   v4 e1big  e1 + 64 MiB vendor ramdisk filler (does ABL load a big vendor ramdisk?)
 	local mode="${1:?v4 e1|e1big|e2|e2b|e3}" S="${2:-$T/dump}" py="python3 -I" key="$HERE/testkey_rsa4096.pem"
 	local d="$OUT/v4/$mode" ri psize=100663296
@@ -262,6 +264,11 @@ print(avbinfo.parse(avbinfo.vbmeta_blob(open(sys.argv[2], "rb").read())[0])["rol
 			# stock base DTBs all use board-id <0 0> (default match); the MTP id lives in dtbo
 			$py "$HERE/dtbprop.py" "$dtb" "$d/board0.dtb" qcom,board-id 0 0
 			dtb="$d/board0.dtb"
+		elif [ "$mode" = e3 ]; then
+			# with dtbo invalid, ABL takes the appended-DT path (DeviceTreeAppended), which needs an
+			# absolute match: MTP(8), subtype 0, HLOS DDR bits = DDRTYPE_4096MB(6)<<8 for >4 GiB RAM
+			$py "$HERE/dtbprop.py" "$dtb" "$d/board600.dtb" qcom,board-id 8 0x600
+			dtb="$d/board600.dtb"
 		fi
 		$py "$HERE/bootv4.py" boot "$S/boot_a.img" "$d/boot_b.img" \
 			--kernel "$KSRC/arch/arm64/boot/Image" --cmdline "$CMDLINE"
