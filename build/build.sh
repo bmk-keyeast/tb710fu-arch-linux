@@ -188,6 +188,10 @@ systemctl disable systemd-networkd sshd 2>/dev/null || true
 # touch-only tablet: skip the SDDM greeter
 mkdir -p /etc/sddm.conf.d
 printf '[Autologin]\nUser=$USERNAME\nSession=plasma\n' > /etc/sddm.conf.d/autologin.conf
+# the hall sensor (gpio-keys SW_LID) reads "closed" with no cover on: logind would suspend ~30 s
+# after boot, the user session never starts (no /run/user), KWin aborts -> black screen
+mkdir -p /etc/systemd/logind.conf.d
+printf '[Login]\nHandleLidSwitch=ignore\nHandleLidSwitchExternalPower=ignore\nHandleLidSwitchDocked=ignore\n' > /etc/systemd/logind.conf.d/10-tb710fu-lid.conf
 rm -rf /var/cache/pacman/pkg/*
 # host (x86) depmod leaves modules.dep empty for these aarch64 .ko.gz
 depmod $(kver)
