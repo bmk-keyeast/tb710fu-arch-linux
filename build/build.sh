@@ -160,8 +160,8 @@ EOF
 
 	log "system config + initramfs"
 	sudo tee "$R/etc/fstab" >/dev/null <<EOF
-PARTUUID=$ROOT_PARTUUID  /      ext4  rw,relatime  0 1
-PARTUUID=$HOME_PARTUUID  /home  ext4  rw,relatime,nofail,x-systemd.device-timeout=60s  0 2
+PARTUUID=$ROOT_PARTUUID  /      ext4  rw,noatime,commit=60  0 1
+PARTUUID=$HOME_PARTUUID  /home  ext4  rw,noatime,commit=60,nofail,x-systemd.device-timeout=60s  0 2
 EOF
 	# no autodetect: it would probe the build host
 	sudo tee "$R/etc/mkinitcpio-tb710fu.conf" >/dev/null <<'EOF'
@@ -196,6 +196,8 @@ printf '[General]\nDisplayServer=wayland\nGreeterEnvironment=QT_WAYLAND_SHELL_IN
 # after boot, the user session never starts (no /run/user), KWin aborts -> black screen
 mkdir -p /etc/systemd/logind.conf.d
 printf '[Login]\nHandleLidSwitch=ignore\nHandleLidSwitchExternalPower=ignore\nHandleLidSwitchDocked=ignore\n' > /etc/systemd/logind.conf.d/10-tb710fu-lid.conf
+# deep suspend does not come back on this kernel yet (Wi-Fi, SSH and the display stay dead)
+systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
 rm -rf /var/cache/pacman/pkg/*
 # host (x86) depmod leaves modules.dep empty for these aarch64 .ko.gz
 depmod $(kver)
