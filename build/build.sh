@@ -248,7 +248,16 @@ print(avbinfo.parse(avbinfo.vbmeta_blob(open(sys.argv[2], "rb").read())[0])["rol
 		truncate -s "$(stat -c %s "$S/vendor_boot_a.img")" "$d/vendor_boot_b.img"
 		;;
 	e2|e2b|e3)
-		local dtb="$KSRC/arch/arm64/boot/dts/qcom/sm8650-lenovo-tb710fu.dtb"
+		local dtb="$d/tb710fu.dtb"
+		# ABL's UpdateDeviceTree() aborts the boot (-> fastboot) when /soc/cache-controller is
+		# missing: it appends qcom,sct-config to the LLCC node, which mainline names
+		# system-cache-controller@25000000. An empty stub satisfies ABL; the kernel ignores it.
+		"$KSRC/scripts/dtc/dtc" -q -I dtb -O dts -o "$d/tb710fu.dts" \
+			"$KSRC/arch/arm64/boot/dts/qcom/sm8650-lenovo-tb710fu.dtb"
+		printf '\n/ {\n\tsoc@0 {\n\t\tcache-controller {\n\t\t};\n\t};\n};\n' >> "$d/tb710fu.dts"
+		"$KSRC/scripts/dtc/dtc" -q -I dts -O dtb -o "$dtb" "$d/tb710fu.dts"
+		rm -f "$d/tb710fu.dts"
+		$py "$HERE/dtcheck.py" "$dtb" || die "DTB lacks a node ABL requires"
 		if [ "$mode" = e2b ]; then
 			# stock base DTBs all use board-id <0 0> (default match); the MTP id lives in dtbo
 			$py "$HERE/dtbprop.py" "$dtb" "$d/board0.dtb" qcom,board-id 0 0
