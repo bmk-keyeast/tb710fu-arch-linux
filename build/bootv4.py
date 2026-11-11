@@ -170,7 +170,9 @@ def main():
                          ramdisk=ramdisk, cmdline=a.cmdline)
     else:
         if a.overlay:
-            ramdisk = (ramdisk if ramdisk is not None else parse_vendor(stock)["vr"]) + newc(
+            # the kernel only recognises an appended raw cpio at a 4-byte aligned offset;
+            # zero padding between archives is skipped
+            ramdisk = pad(ramdisk if ramdisk is not None else parse_vendor(stock)["vr"], 512) + newc(
                 (dest, 0o100755, rd(src)) for dest, src in (o.split("=", 1) for o in a.overlay))
         img = build_vendor(parse_vendor(stock), ramdisk=ramdisk, dtb=None if a.dtb is None else rd(a.dtb))
     open(a.out, "wb").write(img)

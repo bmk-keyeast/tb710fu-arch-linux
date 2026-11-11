@@ -135,7 +135,12 @@ int main(int argc, char** argv) {
   ops.get_unique_guid_for_partition = get_unique_guid_for_partition;
   ops.get_size_of_partition = get_size_of_partition;
 
-  const char* requested[] = {"boot", "dtbo", "vendor_boot", "init_boot", NULL};
+  /* ABL also requests pvmfw when the partition holds an image (PVMFW_BCC builds, HasPvmFw) */
+  const char* requested[] = {"boot", "dtbo", "vendor_boot", "init_boot", NULL, NULL};
+  char pv[1024];
+  snprintf(pv, sizeof pv, "%s/pvmfw%s.img", dir, argv[2]);
+  if (access(pv, R_OK) == 0) requested[4] = "pvmfw";
+  printf("requested: boot dtbo vendor_boot init_boot%s\n", requested[4] ? " pvmfw" : "");
   AvbSlotVerifyData* data = NULL;
   AvbSlotVerifyResult r = avb_slot_verify(&ops, requested, argv[2], AVB_SLOT_VERIFY_FLAGS_NONE,
                                           AVB_HASHTREE_ERROR_MODE_RESTART_AND_INVALIDATE, &data);

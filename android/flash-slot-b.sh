@@ -11,7 +11,8 @@ set -e
 DIR="${1:?usage: flash-slot-b.sh DIR [--write]}"
 WRITE="$2"
 B=/dev/block/by-name
-PARTS="vbmeta vbmeta_system dtbo vendor_boot init_boot recovery boot"
+# everything ABL verifies for the slot: pvmfw is requested too (hash descriptor in vbmeta_system)
+PARTS="vbmeta vbmeta_system pvmfw dtbo vendor_boot init_boot recovery boot"
 
 [ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
 [ "$(getprop ro.boot.slot_suffix)" = _a ] || { echo "current slot is not _a - refusing"; exit 1; }
