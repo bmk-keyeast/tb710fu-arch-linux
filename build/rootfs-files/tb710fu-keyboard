@@ -1,0 +1,300 @@
+#!/usr/bin/python3
+"""Lenovo Keyboard Pack (pogo pins, UART) -> uinput keyboard, touchpad and tablet-mode switch.
+
+Protocol and pins: docs/keyboard.md. DT (build/patches/kernel-0001-keyboard-pack.patch) gives
+/dev/ttyMSM2, the keyboard-vdd regulator-output and SW_DOCK on gpio81.
+    tb710fu-keyboard             run (systemd: tb710fu-keyboard.service)
+    tb710fu-keyboard --selftest  codec/report checks against captured frames
+"""
+import fcntl
+import glob
+import os
+import random
+import select
+import struct
+import sys
+import termios
+
+TTY = "/dev/ttyMSM2"
+VDD = "/sys/devices/platform/keyboard-vdd/state"
+GPIOCHIP = "/sys/bus/platform/devices/f100000.pinctrl/gpiochip*"
+TX_EN = 100  # TLMM line: host->keyboard TX buffer enable
+KEY = bytes.fromhex(
+    "b802d957c648c213d7a630bf40d307ce" "c3abfa516218bd847dcae0cff2acbc12"
+    "f514d072dc1a50000032d17b33b610dd" "6a21eb7e525b3d9f85cb1f667396a160")
+# hid-input.c hid_keyboard[] (HID keyboard usage -> keycode), as shipped in the stock driver
+HID = bytes.fromhex(
+    "000000001e302e2012212223172425263231181910131f14162f112d152c0203"
+    "0405060708090a0b1c010e0f390c0d1a1b2b2b2728293334353a3b3c3d3e3f40"
+    "4142434457586346776e66686f6b6d6a696c674562374a4e604f50514b4c4d47"
+    "48495253567f7475b7b8b9babbbcbdbebfc0c1c2868a82848081838985878871"
+    "7372f0f0f079f0595d7c5c5e5ff0f0f07a7b5a5b55f0f0f0f0f0f0f06ff0f0f0"
+    "f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0b3b4f0f0f0f0f0f0f0f0"
+    "f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f06ff0f0f0f0f0f0f0"
+    "1d2a387d6136647ea4a6a5a3a1737271969e9f8088b1b2b08e98ad8cf0f0f0f0")
+MODS = [29, 42, 56, 125, 97, 54, 100, 126]  # L/R Ctrl Shift Alt Meta, HID modifier bit order
+# consumer usages of the top row; ponytail: 0x394/0x395 have no Linux meaning, remap in KDE shortcuts
+CONSUMER = {0xE2: 113, 0xEA: 114, 0xE9: 115, 0x70: 224, 0x6F: 225,  # mute vol- vol+ bright- bright+
+            0x391: 248, 0x394: 0x174, 0x395: 149, 0x398: 0x247}     # micmute fullscreen prog2 assistant
+EV_SYN, EV_KEY, EV_ABS, EV_SW, EV_LED = 0, 1, 3, 5, 0x11
+BTN_LEFT, BTN_TOUCH, BTN_TOOLS = 0x110, 0x14A, [0x145, 0x14D, 0x14E, 0x14F]  # finger, double..quad
+ABS_X, ABS_Y, ABS_MT_SLOT, ABS_MT_X, ABS_MT_Y, ABS_MT_ID = 0, 1, 0x2F, 0x35, 0x36, 0x39
+SW_TABLET_MODE, SW_DOCK, LED_CAPSL = 1, 5, 1
+TP_X, TP_Y, TP_SLOTS = 3199, 1999, 4
+TP_RES = 28  # ponytail: units/mm guessed for a ~115x72 mm pad; libinput uses it for click zones
+
+
+def log(*a):
+    print(*a, file=sys.stderr, flush=True)
+
+
+def esc(b):
+    return b.replace(b"\x7d", b"\x7d\x5d").replace(b"\x7e", b"\x7d\x5e")
+
+
+def unframe(chunk):
+    """bytes between two 7E: FF esc(seed scrambled..) esc(sum8) -> plain, or None.
+    sum8 covers the escaped (wire) bytes of seed + scrambled payload."""
+    if len(chunk) < 4 or chunk[0] != 0xFF:
+        return None
+    toks, it = [], iter(chunk[1:])  # (value, wire byte sum)
+    for c in it:
+        if c == 0x7D:
+            n = next(it, 0)
+            toks.append((n ^ 0x20, c + n))  # 7D 5D -> 7D, 7D 5E -> 7E
+        else:
+            toks.append((c, c))
+    if len(toks) < 2 or sum(w for _, w in toks[:-1]) & 0xFF != toks[-1][0]:
+        return None
+    seed = toks[0][0]
+    return bytes(v ^ KEY[(seed + i) & 0x3F] for i, (v, _) in enumerate(toks[1:-1]))
+
+
+def frame(plain, seed=None):
+    """host -> keyboard frame"""
+    seed = random.randrange(128) if seed is None else seed
+    data = esc(bytes([seed]) + bytes(c ^ KEY[(seed + i) & 0x3F] for i, c in enumerate(plain)))
+    return b"\x7e\x7e\xff" + data + esc(bytes([sum(data) & 0xFF])) + b"\x7e"
+
+
+class Reports:
+    """turns decoded packets into evdev events on kbd / tp / sw sinks (write(type, code, value), syn())"""
+
+    def __init__(self, kbd, tp, sw):
+        self.kbd, self.tp, self.sw = kbd, tp, sw
+        self.keys, self.cons, self.ids, self.next_id = set(), None, [-1] * TP_SLOTS, 0
+
+    def packet(self, p):
+        t = p[0]
+        if t == 0x11 and len(p) >= 10:
+            self.keyboard(p)
+        elif t == 0x12 and len(p) >= 4:
+            self.consumer(p[2] | p[3] << 8)
+        elif t == 0x13 and len(p) >= 3:
+            self.touch(p)
+        elif t == 0x15 and len(p) >= 5:
+            self.sw.write(EV_SW, SW_TABLET_MODE, int(p[4] == 0))  # 0 = folded back
+            self.sw.syn()
+
+    def keyboard(self, p):
+        now = {MODS[b] for b in range(8) if p[2] >> b & 1}
+        now |= {HID[u] for u in p[4:10] if HID[u] not in (0, 0xF0)}
+        for k in sorted(self.keys - now, key=lambda k: (k in MODS, k)):  # modifiers released last
+            self.kbd.write(EV_KEY, k, 0)
+        for k in sorted(now - self.keys, key=lambda k: (k not in MODS, k)):  # and pressed first
+            self.kbd.write(EV_KEY, k, 1)
+        if now != self.keys:
+            self.kbd.syn()
+        self.keys = now
+
+    def consumer(self, usage):
+        k = CONSUMER.get(usage)
+        if usage and k is None:
+            log("unmapped consumer usage %#x" % usage)
+        if k == self.cons:
+            return
+        if self.cons:
+            self.kbd.write(EV_KEY, self.cons, 0)
+        if k:
+            self.kbd.write(EV_KEY, k, 1)
+        self.kbd.syn()
+        self.cons = k
+
+    def touch(self, p):
+        fingers = {}
+        for i in range((min(p[1], len(p) - 2) - 1) // 5):
+            f, x, y = struct.unpack_from("<BHH", p, 3 + 5 * i)
+            if f >> 4 < TP_SLOTS:
+                fingers[f >> 4] = (x, y) if f & 1 else None  # bit0: touching (7), lifting (6)
+        w, first = self.tp.write, None
+        for s in range(TP_SLOTS):
+            pos = fingers.get(s)
+            if pos is None and self.ids[s] < 0:
+                continue
+            w(EV_ABS, ABS_MT_SLOT, s)
+            if pos is None:
+                self.ids[s] = -1
+                w(EV_ABS, ABS_MT_ID, -1)
+                continue
+            if self.ids[s] < 0:
+                self.next_id = (self.next_id + 1) & 0xFFFF
+                self.ids[s] = self.next_id
+                w(EV_ABS, ABS_MT_ID, self.next_id)
+            w(EV_ABS, ABS_MT_X, pos[0])
+            w(EV_ABS, ABS_MT_Y, pos[1])
+            first = first or pos
+        n = sum(i >= 0 for i in self.ids)
+        w(EV_KEY, BTN_TOUCH, int(n > 0))
+        for i, b in enumerate(BTN_TOOLS):
+            w(EV_KEY, b, int(n == i + 1))
+        if first:
+            w(EV_ABS, ABS_X, first[0])
+            w(EV_ABS, ABS_Y, first[1])
+        w(EV_KEY, BTN_LEFT, p[2] & 1)
+        self.tp.syn()
+
+
+class Gpio:
+    """one output line through the GPIO v2 character device ABI"""
+
+    def __init__(self, line):
+        req = bytearray(592)  # struct gpio_v2_line_request
+        struct.pack_into("<I", req, 0, line)
+        req[256:272] = b"tb710fu-keyboard"
+        struct.pack_into("<Q", req, 288, 1 << 3)  # GPIO_V2_LINE_FLAG_OUTPUT
+        struct.pack_into("<I", req, 560, 1)  # num_lines
+        chip = "/dev/" + os.path.basename(glob.glob(GPIOCHIP)[0])
+        fd = os.open(chip, os.O_RDWR)
+        fcntl.ioctl(fd, 0xC250B407, req)  # GPIO_V2_GET_LINE_IOCTL
+        os.close(fd)
+        self.fd = struct.unpack_from("<i", req, 588)[0]
+
+    def set(self, v):
+        fcntl.ioctl(self.fd, 0xC010B40F, struct.pack("<QQ", v, 1))  # GPIO_V2_LINE_SET_VALUES_IOCTL
+
+
+def open_tty():
+    fd = os.open(TTY, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+    a = termios.tcgetattr(fd)
+    a[0] = a[1] = a[3] = 0
+    a[2] = termios.CS8 | termios.CREAD | termios.CLOCAL
+    a[4] = a[5] = termios.B921600
+    a[6][termios.VMIN] = a[6][termios.VTIME] = 0
+    termios.tcsetattr(fd, termios.TCSANOW, a)
+    termios.tcflush(fd, termios.TCIOFLUSH)
+    return fd
+
+
+def devices():
+    from evdev import AbsInfo, UInput
+    ident = dict(vendor=0x17EF, product=0x6271)
+    keys = sorted({k for k in HID if k not in (0, 0xF0)} | set(MODS) | set(CONSUMER.values()))
+    kbd = UInput({EV_KEY: keys, EV_LED: [LED_CAPSL]}, name="Lenovo Keyboard Pack Keyboard", **ident)
+    ax = lambda m: AbsInfo(0, 0, m, 0, 0, TP_RES)
+    tp = UInput({EV_KEY: [BTN_LEFT, BTN_TOUCH] + BTN_TOOLS,
+                 EV_ABS: [(ABS_X, ax(TP_X)), (ABS_Y, ax(TP_Y)),
+                          (ABS_MT_SLOT, AbsInfo(0, 0, TP_SLOTS - 1, 0, 0, 0)),
+                          (ABS_MT_X, ax(TP_X)), (ABS_MT_Y, ax(TP_Y)),
+                          (ABS_MT_ID, AbsInfo(0, 0, 0xFFFF, 0, 0, 0))]},
+                name="Lenovo Keyboard Pack Touchpad", input_props=[0, 2], **ident)  # POINTER, BUTTONPAD
+    sw = UInput({EV_SW: [SW_TABLET_MODE]}, name="Lenovo Keyboard Pack Tablet Mode", **ident)
+    return kbd, tp, sw
+
+
+def run():
+    import evdev
+    dock = next(d for d in map(evdev.InputDevice, evdev.list_devices())
+                if SW_DOCK in d.capabilities().get(EV_SW, []))
+    tty, tx_en = open_tty(), Gpio(TX_EN)
+    rep = kbd = None
+
+    def send(plain):
+        tx_en.set(1)
+        os.write(tty, frame(plain))
+        termios.tcdrain(tty)
+        tx_en.set(0)
+
+    def docked(on):
+        nonlocal rep, kbd
+        open(VDD, "w").write("enabled" if on else "disabled")
+        log("keyboard", "attached" if on else "detached")
+        if on and rep is None:
+            kbd, tp, sw = devices()
+            rep = Reports(kbd, tp, sw)
+        elif not on and rep is not None:
+            for d in (rep.kbd, rep.tp, rep.sw):
+                d.close()
+            rep = kbd = None
+
+    docked(_sw_state(dock))
+    buf = b""
+    while True:
+        fds = [tty, dock.fd] + ([kbd.fd] if kbd else [])
+        for fd in select.select(fds, [], [])[0]:
+            if fd == dock.fd:
+                for ev in dock.read():
+                    if ev.type == EV_SW and ev.code == SW_DOCK:
+                        docked(bool(ev.value))
+            elif kbd and fd == kbd.fd:
+                for ev in kbd.read():  # LED state written back by the compositor
+                    if ev.type == EV_LED and ev.code == LED_CAPSL:
+                        send(bytes([0x6A, 3, 0x27, 1, int(bool(ev.value))]))
+            else:
+                buf += os.read(tty, 4096)
+                *chunks, buf = buf.split(b"\x7e")
+                buf = buf[-512:]
+                for c in chunks:
+                    p = unframe(c)
+                    if p is None or rep is None:
+                        continue
+                    if p[0] == 0x16 and p[1] == 3:  # plug-in hello: touchpad autosleep off, like stock
+                        send(bytes.fromhex("6a0433020000"))
+                    rep.packet(p)
+
+
+def _sw_state(dev):
+    """current SW_DOCK value (EVIOCGSW)"""
+    bits = bytearray(8)
+    fcntl.ioctl(dev.fd, 0x8008451B, bits)  # EVIOCGSW(8)
+    return bool(bits[0] >> SW_DOCK & 1)
+
+
+def selftest():
+    assert unframe(bytes.fromhex("ff4e11cac7a941512b")) == bytes.fromhex("16040402bb00")
+    assert unframe(bytes.fromhex("ff4bd544e005cec3da")) == bytes.fromhex("6a0433020000")  # stock TX
+    assert unframe(bytes.fromhex("ff4e11cac7a941512c")) is None  # bad checksum
+    # checksum over escaped bytes
+    assert unframe(bytes.fromhex("ff0fdfcbabfa516218bd847d5d44")) == bytes.fromhex("11080000000000000000")
+    assert frame(bytes.fromhex("6a0433020000"), 0x4B).hex() == "7e7eff4bd544e005cec3da7e"  # = stock
+    for _ in range(500):
+        p = bytes(random.choice([0x7D, 0x7E, 0x00, 0xFF, random.randrange(256)]) for _ in range(12))
+        f = frame(p)
+        assert f[:3] == b"\x7e\x7e\xff" and f[-1] == 0x7E and b"\x7e" not in f[3:-1]
+        assert unframe(f[2:-1]) == p
+
+    class Sink(list):
+        def write(self, *ev):
+            self.append(ev)
+
+        def syn(self):
+            self.append("syn")
+
+    kbd, tp, sw = Sink(), Sink(), Sink()
+    r = Reports(kbd, tp, sw)
+    for h in ["11080200040000000000", "11080200000000000000", "11080000000000000000",  # shift+a
+              "120491030000", "120400000000", "1503020100",  # micmute, folded
+              "130600079201 2b06".replace(" ", ""), "130b0007b4094603174e071b04", "13060106db073b05"]:
+        r.packet(bytes.fromhex(h))
+    assert kbd[:6] == [(1, 42, 1), (1, 30, 1), "syn", (1, 30, 0), "syn", (1, 42, 0)], kbd
+    assert (1, 248, 1) in kbd and (1, 248, 0) in kbd
+    assert sw == [(5, 1, 1), "syn"]
+    assert (3, ABS_MT_X, 402) in tp and (3, ABS_MT_Y, 1579) in tp  # first finger
+    i = tp.index((3, ABS_MT_SLOT, 1))
+    assert tp[i + 1][1] == ABS_MT_ID and tp[i + 2] == (3, ABS_MT_X, 0x74E)  # second finger
+    assert (1, BTN_LEFT, 1) not in tp[:i] and (1, BTN_LEFT, 1) in tp  # click
+    assert r.ids == [-1] * TP_SLOTS and (1, BTN_TOUCH, 0) in tp[-8:], tp[-8:]  # all lifted
+    print("selftest ok")
+
+
+if __name__ == "__main__":
+    selftest() if sys.argv[1:] == ["--selftest"] else run()

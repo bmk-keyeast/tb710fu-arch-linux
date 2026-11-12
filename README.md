@@ -120,8 +120,8 @@ wsl -d Ubuntu --cd ~ -- bash tb710fu/build/build.sh all     # deps → kernel �
 1. 이미지: [out/tb710fu-ssd.img.xz](out/tb710fu-ssd.img.xz) (원본은 WSL `~/tb710fu/out/`)
 2. **balenaEtcher**(`.img.xz` 바로 가능) 또는 **Rufus**(압축 풀어 `.img`로, DD 모드)로 SSD에 쓰기
 3. 첫 부팅 때 `tb710fu-firstboot.service`가:
-   - 백업 GPT를 디스크 끝으로 옮기고, 루트(p1)를 `ROOT_SIZE`(64G)로 늘림 + `resize2fs`
-   - 남은 공간 전부를 `/home` 파티션(p2, `HOME_PARTUUID` 고정)으로 만들고 ext4 포맷, 빌드 때 만든 홈 디렉터리 복사
+   - 백업 GPT를 디스크 끝으로 옮기고, 루트(p1)를 `ROOT_SIZE`(64G)로 늘림 + `btrfs filesystem resize max /`
+   - 남은 공간 전부를 `/home` 파티션(p2, `HOME_PARTUUID` 고정)으로 만들고 btrfs 포맷, 빌드 때 만든 홈 디렉터리 복사
    - `/var/lib/tb710fu/firstboot-done`을 남겨 한 번만 실행
 4. `/home`은 `/etc/fstab`에서 `PARTUUID=$HOME_PARTUUID`로 마운트 (`nofail`이라 실패해도 부팅은 됨)
 
@@ -179,6 +179,6 @@ SSD는 `ROOT_SIZE` + 여유 공간보다 커야 한다 (128GB 이상 권장).
   - `novatek/`, `awinic/` → 그대로
   - `tplg/Lenovo-TB710FU-tplg.bin` → `/usr/lib/firmware/qcom/sm8650/` (커널은 `qcom/<driver_name=sm8650>/<model>-tplg.bin`을 찾음)
   - `ath12k/`, `qca/` → `linux-firmware` 패키지와 겹치므로 `/usr/lib/firmware/updates/`에 (우선순위 높음)
-  - `usr/share/qcom` → `/usr/share/qcom` (hexagonrpcd용, Arch 공식 저장소엔 hexagonrpcd 없음)
+  - 센서(가속도계 등)는 ADSP 센서 허브(SSC) 뒤에 있음 → `/usr/share/qcom/sm8650/Lenovo/tb710fu/`(hexagonrpcd 레이아웃: SpendyYT의 config/registry/socinfo + 스톡 `dspso.bin`의 adsp 라이브러리) + `build/rootfs-files/build-sensors.sh`(hexagonrpc, libssc, SSC 지원 iio-sensor-proxy 소스 빌드)
 - UCM: `HiFi.conf`, `Lenovo-TB710FU.conf` → `/usr/share/alsa/ucm2/Lenovo/tb710fu/`, `conf.d/sm8650/Lenovo-TB710FU.conf` 심볼릭 링크
 - pinned commits: kernel `4d04410798b5`, firmware `45a7e188a45b`

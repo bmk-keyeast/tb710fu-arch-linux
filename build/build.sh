@@ -24,15 +24,20 @@ deps() {
 	sudo apt-get update
 	sudo apt-get install -y clang lld llvm flex bison bc libssl-dev libelf-dev dwarves cpio \
 		python3 qemu-user-static binfmt-support arch-install-scripts \
-		libarchive-tools gdisk e2fsprogs rsync curl
+		libarchive-tools gdisk e2fsprogs btrfs-progs rsync curl
 }
 
 kernel() {
 	[ -f "$KSRC/Makefile" ] || die "no kernel tree at $KSRC"
+	local p
+	for p in "$HERE"/patches/kernel-*.patch; do
+		git -C "$KSRC" apply --reverse --check "$p" 2>/dev/null || git -C "$KSRC" apply "$p"
+	done
 	cp "$KSRC/arch/arm64/configs/sm8650_defconfig" "$KSRC/.config"
 	# USB NVMe enclosures want UAS; root lives there.
 	# BOOT_CONFIG: ABL appends a bootconfig blob after the ramdisk (vendor_boot v4); the kernel must strip it.
-	"$KSRC/scripts/config" --file "$KSRC/.config" -e USB_UAS -e BOOT_CONFIG
+	# REGULATOR_USERSPACE_CONSUMER: Keyboard Pack pogo power (keyboard-vdd), switched by tb710fu-keyboard
+	"$KSRC/scripts/config" --file "$KSRC/.config" -e USB_UAS -e BOOT_CONFIG -e REGULATOR_USERSPACE_CONSUMER
 	kmake olddefconfig
 	kmake Image.gz dtbs modules
 	log "kernel $(kver) built"
@@ -54,24 +59,29 @@ rootfs() {
 	sudo mount --bind "$R" "$R"
 	sudo bsdtar -xpf "$tgz" -C "$R"
 
-	log "pacman: update + Plasma (qemu, slow)"
-	# pacman's download sandbox doesn't work under qemu-user
 	sudo arch-chroot "$R" /bin/bash -e <<EOF
 pacman-key --init
 pacman-key --populate archlinuxarm
 pacman -Rdd --noconfirm linux-aarch64
+EOF
+	else
+		log "reusing pacman stage in $R (FRESH=1 to redo)"
+		sudo mount --bind "$R" "$R"
+	fi
+	# every run, so PACKAGES added later reach a reused stage too (a no-op when up to date)
+	log "pacman: update + Plasma (qemu, slow)"
+	# pacman's download sandbox doesn't work under qemu-user
+	sudo arch-chroot "$R" /bin/bash -e <<EOF
 for i in 1 2 3 4 5; do
 	pacman -Syu --noconfirm --needed --disable-sandbox --disable-download-timeout $(echo $PACKAGES) && break
 	[ \$i = 5 ] && exit 1
 	echo "pacman failed, retry \$i/5"; sleep 10
 done
 EOF
-	else
-		log "reusing pacman stage in $R (FRESH=1 to redo)"
-		sudo mount --bind "$R" "$R"
-	fi
 
 	log "kernel modules"
+	# only this kernel's modules (the release string changes with every tree change, e.g. -dirty)
+	sudo rm -rf "$R/usr/lib/modules"
 	sudo make -C "$KSRC" ARCH=arm64 LLVM=1 modules_install INSTALL_MOD_PATH="$R/usr" INSTALL_MOD_STRIP=1
 	sudo rm -f "$R/usr/lib/modules/$(kver)/build" "$R/usr/lib/modules/$(kver)/source"
 
@@ -87,11 +97,49 @@ EOF
 	# device-specific WCN7850 board/BT files override linux-firmware's (updates/ is searched first)
 	sudo install -Dm644 -t "$F/updates/ath12k/WCN7850/hw2.0" "$fw/ath12k/WCN7850/hw2.0/board-2.bin"
 	sudo install -Dm644 -t "$F/updates/qca" "$fw/qca"/*
-	sudo mkdir -p "$R/usr/share" && sudo cp -r "$fw/usr/share/qcom" "$R/usr/share/"
+	# hexagonrpcd root for the ADSP sensor PD, at the path it derives from the DT
+	# (/usr/share/qcom/<qcom,soc>/<model's first word>/<board compatible>) in its own layout;
+	# configs/registry/socinfo from SpendyYT's dump, DSP libs from the stock dsp partition
+	local s="$fw/usr/share/qcom/sm8650/Lenovo/TB710FU" q="$R/usr/share/qcom/sm8650/Lenovo/tb710fu"
+	[ -r "$DSPSO" ] || die "DSPSO ($DSPSO) not readable: stock dspso.bin from the ROM"
+	sudo rm -rf "$R/usr/share/qcom" && sudo mkdir -p "$q/sensors" "$q/dsp"
+	sudo cp -r "$s/config" "$s/registry" "$q/sensors/"
+	sudo cp "$s/vendor/etc/sensors/sns_reg_config" "$q/sensors/sns_reg.conf"
+	sudo cp -r "$s/socinfo" "$q/"
+	sudo debugfs -R "rdump /adsp $q/dsp" "$DSPSO" 2>/dev/null
+	[ -n "$(ls "$q/dsp/adsp")" ] || die "no ADSP libs extracted from $DSPSO"
+	sudo chmod -R a+rX "$R/usr/share/qcom"
 	local dev="$REPO/device-lenovo-tb710fu" U="$R/usr/share/alsa/ucm2"
 	sudo install -Dm644 -t "$U/Lenovo/tb710fu" "$dev/HiFi.conf" "$dev/Lenovo-TB710FU.conf"
 	sudo mkdir -p "$U/conf.d/sm8650"
 	sudo ln -sf ../../Lenovo/tb710fu/Lenovo-TB710FU.conf "$U/conf.d/sm8650/Lenovo-TB710FU.conf"
+
+	# rebuilt only when the script (pinned commits) changed
+	local stamp="$R/var/lib/tb710fu/build-sensors.sha256"
+	if ! sudo cmp -s <(sha256sum < "$HERE/rootfs-files/build-sensors.sh") "$stamp"; then
+		log "sensors: hexagonrpcd + libssc + iio-sensor-proxy (qemu build)"
+		sudo install -Dm755 "$HERE/rootfs-files/build-sensors.sh" "$R/usr/local/sbin/tb710fu-build-sensors"
+		sudo arch-chroot "$R" /usr/local/sbin/tb710fu-build-sensors
+		sha256sum < "$HERE/rootfs-files/build-sensors.sh" | sudo install -Dm644 /dev/stdin "$stamp"
+	fi
+
+	log "Keyboard Pack: UART -> uinput daemon"
+	python3 -I "$HERE/rootfs-files/tb710fu-keyboard" --selftest
+	sudo install -Dm755 "$HERE/rootfs-files/tb710fu-keyboard" "$R/usr/bin/tb710fu-keyboard"
+	echo uinput | sudo tee "$R/etc/modules-load.d/uinput.conf" >/dev/null
+	sudo tee "$R/etc/systemd/system/tb710fu-keyboard.service" >/dev/null <<'EOF'
+[Unit]
+Description=Lenovo Keyboard Pack (pogo UART) input
+After=systemd-modules-load.service systemd-udev-settle.service
+
+[Service]
+ExecStart=/usr/bin/tb710fu-keyboard
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
 
 	log "A/B slot tools"
 	[ -x "$OUT/qbootctl" ] || bash "$HERE/qbootctl.sh"
@@ -160,8 +208,8 @@ EOF
 
 	log "system config + initramfs"
 	sudo tee "$R/etc/fstab" >/dev/null <<EOF
-PARTUUID=$ROOT_PARTUUID  /      ext4  rw,noatime,commit=60  0 1
-PARTUUID=$HOME_PARTUUID  /home  ext4  rw,noatime,commit=60,nofail,x-systemd.device-timeout=60s  0 2
+PARTUUID=$ROOT_PARTUUID  /      btrfs  rw,noatime,compress=zstd:1,commit=60  0 0
+PARTUUID=$HOME_PARTUUID  /home  btrfs  rw,noatime,compress=zstd:1,commit=60,nofail,x-systemd.device-timeout=60s  0 0
 EOF
 	# no autodetect: it would probe the build host
 	sudo tee "$R/etc/mkinitcpio-tb710fu.conf" >/dev/null <<'EOF'
@@ -182,7 +230,7 @@ echo "$USERNAME:$PASSWORD" | chpasswd
 passwd -l root
 echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/wheel
 grep -q QT_IM_MODULE /etc/environment || printf 'GTK_IM_MODULE=fcitx\nQT_IM_MODULE=fcitx\nXMODIFIERS=@im=fcitx\n' >> /etc/environment
-systemctl enable sddm NetworkManager bluetooth qbootctl-mark-successful tb710fu-firstboot
+systemctl enable sddm NetworkManager bluetooth qbootctl-mark-successful tb710fu-firstboot tb710fu-keyboard
 # ALARM defaults: networkd fights NetworkManager; no sshd while the test password is set
 systemctl disable systemd-networkd sshd 2>/dev/null || true
 # touch-only tablet: skip the SDDM greeter
@@ -332,12 +380,14 @@ image() {
 	# tb710fu-firstboot grows it to ROOT_SIZE and creates /home from the rest of the disk.
 	[ -f "$R/usr/bin/tb710fu-firstboot" ] || die "run: build.sh rootfs"
 	findmnt "$R" >/dev/null && die "$R is still mounted"
-	local img="$OUT/tb710fu-ssd.img" fs="$OUT/root.ext4" mib
+	local img="$OUT/tb710fu-ssd.img" fs="$OUT/root.btrfs" mib
 	# content + 30% + 1 GiB headroom; first boot grows it anyway
 	mib=$(( $(sudo du -sm "$R" | cut -f1) * 13 / 10 + 1024 ))
-	log "root filesystem ${mib} MiB from $R"
-	sudo rm -f "$fs"
-	sudo mkfs.ext4 -q -F -L tb710fu-root -d "$R" "$fs" "${mib}M"
+	log "root filesystem (btrfs) ${mib} MiB from $R"
+	rm -f "$fs" && truncate -s "${mib}M" "$fs"
+	# ponytail: files land uncompressed (Ubuntu's btrfs-progs predates --compress); new writes use
+	# compress=zstd from fstab, `btrfs filesystem defragment -r -czstd /` on the device compresses the rest
+	sudo mkfs.btrfs -q -f -L tb710fu-root --rootdir "$R" "$fs"
 	sudo chown "$(id -u):$(id -g)" "$fs"
 	rm -f "$img" "$img.xz"
 	truncate -s $(( mib + 2 ))M "$img"       # 1 MiB GPT/alignment in front, backup GPT behind

@@ -27,8 +27,8 @@ if [ ! -e "$home" ]; then
 		sfdisk --no-reread --force "$disk"
 	partx -u "$disk"
 	udevadm settle
-	resize2fs "$root"
-	mkfs.ext4 -F -L tb710fu-home "$home"
+	btrfs filesystem resize max /
+	mkfs.btrfs -f -L tb710fu-home "$home"
 	# carry over the home directories created at build time
 	mnt=$(mktemp -d)
 	mount "$home" "$mnt"

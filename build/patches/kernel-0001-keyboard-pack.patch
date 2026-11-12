@@ -1,0 +1,103 @@
+diff --git a/arch/arm64/boot/dts/qcom/sm8650-lenovo-tb710fu.dts b/arch/arm64/boot/dts/qcom/sm8650-lenovo-tb710fu.dts
+index 96daa976b..33f9a5d9c 100644
+--- a/arch/arm64/boot/dts/qcom/sm8650-lenovo-tb710fu.dts
++++ b/arch/arm64/boot/dts/qcom/sm8650-lenovo-tb710fu.dts
+@@ -28,6 +28,7 @@ / {
+ 	aliases {
+ 		serial0 = &uart15;
+ 		serial1 = &uart14;
++		serial2 = &uart7;
+ 	};
+ 
+ 	chosen {
+@@ -145,6 +146,12 @@ platform {
+ 		};
+ 	};
+ 
++	/* Keyboard Pack pogo power, switched by tb710fu-keyboard via sysfs "state" */
++	keyboard-vdd {
++		compatible = "regulator-output";
++		vout-supply = <&vreg_l8b_1p8>;
++	};
++
+ 	gpio-keys {
+ 		compatible = "gpio-keys";
+ 
+@@ -160,11 +167,11 @@ key-volume-up {
+ 			wakeup-source;
+ 		};
+ 
+-		event-hall-sensor {
+-			label = "Hall Effect Sensor";
++		event-keyboard-dock {
++			label = "Keyboard Pack";
+ 			gpios = <&tlmm 81 GPIO_ACTIVE_LOW>;
+ 			linux,input-type = <EV_SW>;
+-			linux,code = <SW_LID>;
++			linux,code = <SW_DOCK>;
+ 			debounce-interval = <15>;
+ 			linux,can-disable;
+ 			wakeup-source;
+@@ -379,7 +386,7 @@ vreg_l5b_3p1: ldo5 {
+ 
+ 		vreg_l8b_1p8: ldo8 {
+                         regulator-name = "vreg_l8b_1p8";
+-                        regulator-min-microvolt = <1800000>;
++                        regulator-min-microvolt = <3300000>;
+                         regulator-max-microvolt = <3300000>;
+                         regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+                         regulator-allow-set-load;
+@@ -647,6 +654,29 @@ vreg_l3i_1p2: ldo3 {
+ // Enable i2c
+ &qupv3_id_0 {
+ 	status = "okay";
++
++	uart7: serial@a9c000 {
++		compatible = "qcom,geni-uart";
++		reg = <0 0x00a9c000 0 0x4000>;
++
++		interrupts = <GIC_SPI 579 IRQ_TYPE_LEVEL_HIGH 0>;
++
++		clocks = <&gcc GCC_QUPV3_WRAP1_S7_CLK>;
++		clock-names = "se";
++
++		interconnects = <&clk_virt MASTER_QUP_CORE_1 QCOM_ICC_TAG_ALWAYS
++				 &clk_virt SLAVE_QUP_CORE_1 QCOM_ICC_TAG_ALWAYS>,
++				<&gem_noc MASTER_APPSS_PROC QCOM_ICC_TAG_ACTIVE_ONLY
++				 &config_noc SLAVE_QUP_1 QCOM_ICC_TAG_ACTIVE_ONLY>;
++		interconnect-names = "qup-core",
++				     "qup-config";
++
++		power-domains = <&rpmhpd RPMHPD_CX>;
++		operating-points-v2 = <&qup_opp_table_100mhz>;
++
++		pinctrl-0 = <&qup_uart7_default>, <&kb_tx_en_default>;
++		pinctrl-names = "default";
++	};
+ };
+ 
+ &qupv3_id_1 {
+@@ -1032,6 +1062,23 @@ sw-ctrl-pins {
+ 		};
+ 	};
+ 
++	qup_uart7_default: qup-uart7-default-state {
++		/* TX, RX */
++		pins = "gpio62", "gpio63";
++		function = "qup1_se7";
++		drive-strength = <2>;
++		bias-disable;
++	};
++
++	/* host -> keyboard TX buffer enable (stock lenovo_kb tx-en-gpios), driven by tb710fu-keyboard */
++	kb_tx_en_default: kb-tx-en-default-state {
++		pins = "gpio100";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-disable;
++		output-low;
++	};
++
+ 	keyboard_sensor_default: keyboard-sensor-default-state {
+ 		wakeup-pins {
+ 			pins = "gpio137";
