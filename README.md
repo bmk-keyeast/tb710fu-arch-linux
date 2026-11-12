@@ -1,188 +1,147 @@
-# TB710FU Linux (Arch Linux ARM + KDE Plasma)
+# TB710FU Linux
 
-배경/설계: Obsidian `R&E/TB710FU 리눅스/` (00 MOC ~ 08)
+**레노버 TB710FU(Xiaoxin Pad Pro GT, Snapdragon 8 Gen 3 / SM8650)를 부트로더 잠금을 유지한 채 Arch Linux ARM + KDE Plasma로 부팅**하는 빌드 도구 모음입니다.
 
-## 잠금 상태 부팅 재설계: GKI v4 (2026-11-10)
+- 안드로이드는 슬롯 a에 그대로 두고, 리눅스는 **슬롯 b**에 AOSP testkey로 서명해서 넣습니다(LTBox 방식). fastboot와 언락이 필요 없습니다.
+- 루트 파일시스템은 USB-C로 연결한 SSD(NVMe)에 둡니다. 내장 저장소(`userdata` 축소)로 옮기는 것은 다음 단계입니다.
+- 커널은 SpendyYT의 메인라인 7.2 트리를 기반으로 합니다.
 
-**왜:** SpendyYT의 `deviceinfo`(header v2, `flash_method=fastboot`)는 언락 기기 기준. 잠긴 기기에 v2 boot_b를 넣었더니 ABL이 커널 시작 전에 슬롯 b를 부팅 불가로 표시하고 슬롯 a로 돌아감 (pstore에 Android 로그만 남음). 양산 펌웨어라 ABL 로그(`logfs`)는 비어 있음.
+배경과 설계 메모: Obsidian `R&E/TB710FU 리눅스/`
 
-**설계:** 순정 슬롯 a의 v4 이미지를 헤더 템플릿으로 쓰고 내용물만 교체 (`build/bootv4.py`, 순정 이미지 왕복 재조립 시 바이트 동일 확인)
+## 현재 상태 (2026-11-13)
 
-| 파티션 | 내용 |
-|---|---|
-| `boot_b` | v4, mainline `Image`(순정처럼 비압축) + cmdline, testkey 서명, 롤백 인덱스 순정값 |
-| `vendor_boot_b` | v4, 순정 헤더/cmdline/bootconfig 유지, DTB = mainline `sm8650-lenovo-tb710fu.dtb`(msm-id 0x2b8 / board-id 0x8 = 이 기기 MTP 보드), ramdisk = 우리 initramfs |
-| `init_boot_b` | v4, 빈 cpio (Android first-stage init이 덮어쓰지 않게) |
-| `vbmeta_b` | 슬롯 a vbmeta + vendor_boot/init_boot 해시 갱신 후 testkey 재서명 (`avbsign.py refresh`, 무변경 시 순정과 동일 descriptor 확인) |
-| 나머지 | 슬롯 a 사본 (`android/flash-slot-b.sh`가 페이로드 없는 파티션은 a에서 복사) |
-
-- 커널에 `CONFIG_BOOT_CONFIG=y` 추가: v4에서 ABL이 ramdisk 뒤에 bootconfig를 붙이므로
-- **진단 채널:** mainline DTS의 ramoops(`0xac300000`, 1MB)가 순정 Android와 같은 영역 → mainline이 조금이라도 돌면 Android 복귀 후 `/sys/fs/pstore`에 로그가 남음. `android/collect-boot-log.sh`(읽기 전용)로 모으고 `build/bootlog.py`로 판별
-
-**실험 페이로드** (`build.sh v4 e1|e2|e3`, 전부 오프라인 해시 대조 통과)
-
-| | 내용 | 확인하는 것 |
+| 항목 | 상태 | 비고 |
 |---|---|---|
-| **E2** | mainline v4 (위 표) | 본 시도. **2026-11-10 슬롯 b에 기록·재검증 완료** |
-| E3 | E2 + dtbo 0으로 채움 + board-id `<8 0>, <8 0x600>` | E2가 fastboot로 떨어진 원인 대응: ABL `ApplyOverlay`는 오버레이 **성공 시에만** DTB를 로드 주소로 복사 → 순정 dtbo가 mainline DTB에 적용 실패하면 DT 없음 → `UpdateDeviceTree` 실패. dtbo magic이 무효면 `DeviceTreeAppended`가 DTB를 직접 복사(엄격 매칭: MTP 8, subtype 0, DDR 비트 = RAM 4GB 초과면 0) |
-| E1 | 순정 Android 커널 + `init=/없음 panic=5` | 슬롯 b 펌웨어 체인 + 서명 경로가 통과하는지 (유저공간 안 뜸 → 데이터 안전) |
+| 잠긴 부트로더에서 메인라인 부팅 | ✅ | 슬롯 b, `build.sh v4 e3` |
+| USB-C 호스트 + 외장 루트 | ✅ | initramfs에서 ADSP를 먼저 띄움 |
+| KDE Plasma (Wayland) | ✅ | freedreno FD750 GPU 가속 확인 |
+| Wi-Fi, SSH | ✅ | |
+| 키보드 팩 (포고 핀) | 🟡 빌드됨, 기기 미검증 | 프로토콜은 안드로이드 캡처로 검증 → [docs/keyboard.md](docs/keyboard.md) |
+| 화면 회전 센서 | 🟡 빌드됨, 기기 미검증 | ADSP 센서 허브(SSC) 경유, 장착 방향 보정 필요할 수 있음 |
+| 절전(deep suspend) | ❌ | 깨어나지 않음 → 절전 타깃을 막아 둠 |
+| 화면 끔 후 다시 켜기 | ⚠️ | DPMS on 때 리셋된 적 있음 → 자동 화면 끔 꺼 둠 |
 
-**오프라인 검증 (기기 없이, 2026-11-10 밤)**
+USB 메모리는 쓰기 지연(1회 약 175ms)이 커서 Plasma가 수 분씩 멈췄습니다. **NVMe SSD를 권장**합니다.
 
-| 검증 | 도구 | 결과 |
-|---|---|---|
-| AOSP libavb `avb_slot_verify` (잠김, testkey만 신뢰, 요청 boot/dtbo/vendor_boot/init_boot, 실제 롤백 floor) | `build/avbverify/` | 순정 a, **거부됐던 v2**, E1, E1big, E2, E3 전부 OK → v2 거부는 AVB가 아니라 ABL 이미지 로드 문제. 음성 대조군(변조·다른 키·롤백)은 맞는 오류로 실패 |
-| QEMU virt + ABL과 같은 initrd(vendor ramdisk + init_boot ramdisk + bootconfig 트레일러), 디스크 없음 | `build/qemu-test.sh nodisk` | `Load bootconfig: 216 bytes 16 nodes`, initramfs `/init` 실행, 폴백 hook 동작 |
-| 같은 조건 + USB 이미지 사본(31G virtio) | `qemu-test.sh disk` | PARTUUID로 루트 마운트 → systemd → SDDM → 그래픽 타깃 → 로그인. **첫 부팅 버그 2개 발견·수정** (아래) |
-| 수정 후 전체 부팅 2회 | 〃 | 1회차: 루트 8.4→15.5G 온라인 확장, `/home` 15.5G 생성·마운트. 2회차: 첫 부팅 건너뜀, `/home` 마운트 |
+## 부팅 구조
 
-찾아서 고친 것:
-- 첫 부팅 `/home` 생성 실패: ① `--relocate` 뒤 별도 `sfdisk -N 1`이 systemd 환경에서 실패, ② `lsblk -no PARTUUID`가 udev db 이전이라 빈 값 → GPT를 한 번에 다시 쓰고(루트 시작/PARTUUID 유지, PARTUUID는 `blkid`), 값이 없으면 GPT를 건드리지 않음 (`build/rootfs-files/tb710fu-firstboot`)
-- 폴백 hook: qbootctl이 실패하면 비상 셸에 갇히던 것 → 항상 재부팅 (ABL 재시도 소진 시 슬롯 a). v4 페이로드는 `--overlay`로 최신 hook을 initramfs 뒤에 덧붙임 (sudo 없이)
-- 디버그 도구: `qemu-shell.py`(QEMU 루트 셸 자동 조작), `imgpatch.sh`(이미지 안 파일 교체, sudo 없이), `write-usb.ps1`(USB 쓰기 + 읽어서 해시 검증)
+ABL은 순정 GKI v4 레이아웃만 받아 줍니다. 그래서 순정 슬롯 a 이미지를 헤더 템플릿으로 쓰고 내용만 바꿉니다([build/bootv4.py](build/bootv4.py)).
 
-**아침에 반영할 것** (기기·USB를 건드리므로 사용자 결정 후, UniXNU 세션과 사전 공지)
-1. USB 다시 쓰기: `out/tb710fu-ssd.img.xz` (수정된 첫 부팅 포함, sha256은 `out/tb710fu-ssd.img.sha256`). 지금 USB의 첫 부팅 스크립트는 구버전이라 `/home`이 안 만들어짐 (부팅 자체는 됨)
-2. 슬롯 b E2 재기록: 지금 슬롯 b의 E2는 폴백 hook 수정 전 버전. 테스트에 USB를 꽂는다면 차이 없음
-
-**테스트 절차**
-1. USB(이미지 기록됨)를 OTG로 연결 → KernelSU "Reboot to Linux"
-2. Linux가 뜨면 성공. Android로 돌아오면 adb 연결 → `collect-boot-log.sh` → `bootlog.py`로 판별
-   - mainline 로그 없음 → E3 → (그래도 없으면) E1
-   - mainline 로그 있음 → 어디서 멈췄는지 보고 커널/initramfs 쪽 수정
-
-## 슬롯 상태 (2026-11-10, 루트 Android에서 읽기 전용 덤프, `out/dump-20261110/`)
-
-- 펌웨어 `ZUI_17.5.04.070 ROW`, 현재 슬롯 `_a`, 잠김(green), KernelSU 루트. EDL 프로그래머 없음 → **루트 Android에서 기록**
-- `vbmeta_a`/`vbmeta_b` 둘 다 testkey 서명, `boot` chain도 testkey → **vbmeta 재키잉 불필요**
-- `build/avbcheck.py`로 해시 대조: 슬롯 a 전부 MATCH, **슬롯 b는 dtbo·vendor_boot MISMATCH** (059 ROW vbmeta + PRC 이미지가 섞임). `vbmeta_system_b` 롤백 인덱스(1759622400)도 슬롯 a(1780617600)보다 낮음 → 슬롯 b는 지금 상태로는 부팅 거부될 것
-- 그래서 [android/flash-slot-b.sh](android/flash-slot-b.sh): 슬롯 a의 `vbmeta vbmeta_system dtbo vendor_boot init_boot recovery`를 슬롯 b로 복사 + `boot_b`에 Linux. 슬롯 a는 안 건드림, 기본은 dry run, `--write`일 때 슬롯 b 백업 후 기록·검증
-- **2026-11-10 기록 완료**: 다시 덤프해서 슬롯 b 해시 전부 MATCH, `boot_b` = `boot-signed.img`(testkey OK), 슬롯 a 7개 파티션 덤프와 동일, 활성 슬롯 `_a` 그대로. 슬롯 b 원본 백업: `out/backup-slot-b-20261110/` (기기에도 `/data/local/tmp/tb710fu-flash/backup-slot-b`)
-- 첫 부팅 루트 크기: `min(ROOT_SIZE, 디스크 절반)` → 32GB USB면 루트 ~15.5G + `/home` ~15.5G
-
-## 현재 상태 (2026-11-05)
-
-| 산출물 (WSL `~/tb710fu/out/`) | 상태 |
+| 슬롯 b 파티션 | 내용 |
 |---|---|
-| 커널 `7.2.0-g4d04410798b5` | ✅ |
-| `rootfs/` (ALARM + Plasma 6.8.2, 5.7G) | ✅ GMU 펌웨어, 캐시 삭제, networkd/sshd off, 자동 로그인, qbootctl 반영 |
-| `initramfs.img`, `boot.img` (27MB) | ✅ |
-| `qbootctl` (aarch64 크로스 빌드) | ✅ |
-| `tb710fu-ssd.img.xz` (1.5G, 원본 8.4G) | ✅ e2fsck 통과, Windows 사본 [out/tb710fu-ssd.img.xz](out/tb710fu-ssd.img.xz) |
-| `boot-signed.img`, `vbmeta-signed.img` | ⚠️ **임시본**: 6월 boot + 8월 vbmeta 덤프로 서명. 실제로는 **슬롯 b 덤프**로 다시 `sign` |
+| `boot_b` | 메인라인 `Image` + cmdline, testkey 서명, 순정 롤백 인덱스 |
+| `vendor_boot_b` | 메인라인 DTB + 우리 initramfs (순정 헤더·bootconfig 유지) |
+| `init_boot_b` | 빈 ramdisk (안드로이드 first-stage init이 덮어쓰지 않게) |
+| `dtbo_b` | 0으로 채움 |
+| `vbmeta_b` | 슬롯 a vbmeta에서 해시만 갱신해 testkey로 재서명 |
+| 나머지 | 슬롯 a 사본 |
 
-**계획:** USB-C SSD로 먼저 부팅해 기능 테스트 → 이후 내부 `userdata` 쪽으로 정식 설치.
-
-**남은 일**
-1. LTBox로 `boot_b`, `vbmeta_b`(+ `boot_a`, `vbmeta_a`) 덤프 → `build.sh sign boot_b.img vbmeta_b.img`
-2. `tb710fu-ssd.img.xz`를 SSD에 쓰기 → 부팅 → 기능 테스트
-
-## 받기
-
-```
-git clone --recurse-submodules https://github.com/bmk-mikufan/tb710fu-arch-linux.git
-# 커널 트리는 WSL ext4에 따로 (NTFS는 대소문자 구분 문제로 커널 트리가 깨짐)
-wsl -d Ubuntu --cd ~ -- git clone --depth 1 https://github.com/SpendyYT/tb710fu-linux.git tb710fu/tb710fu-linux
-wsl -d Ubuntu --cd ~ -- ln -sfn "<이 저장소 경로를 /mnt/c/... 로>/build" tb710fu/build
-```
-
-서브모듈: `device-lenovo-tb710fu`, `linux-firmware-tb710fu`, `tb710fu-mainline` (SpendyYT), `LTBox` (miner7222).
+ABL을 통과하려면 세 가지가 필요했습니다.
+1. **dtbo를 비울 것.** 순정 오버레이가 메인라인 DTB에 적용되지 않으면 ABL은 DTB를 아예 복사하지 않습니다(`ApplyOverlay`는 성공할 때만 복사). dtbo가 무효면 ABL이 DTB를 직접 복사합니다.
+2. **DTB의 `qcom,board-id = <8 0>`.** RAM이 4GB를 넘으면 DDR 비트가 0이어야 합니다.
+3. **`/soc/cache-controller` 빈 노드.** ABL의 `UpdateDeviceTree`가 이 노드를 찾습니다.
 
 ## 빌드 (WSL Ubuntu)
 
-`~/tb710fu/build`는 이 폴더의 `build/`를 가리키는 심볼릭 링크. 출력은 WSL `~/tb710fu/out/`.
+### 준비
 
-```
-wsl -d Ubuntu --cd ~ -- bash tb710fu/build/build.sh all     # deps → kernel → rootfs → bootimg → image
+```bash
+git clone --recurse-submodules https://github.com/bmk-mikufan/tb710fu-arch-linux.git
+# 커널 트리는 WSL ext4에 (NTFS는 대소문자를 구분하지 않아 커널 트리가 깨짐)
+wsl -d Ubuntu --cd ~ -- git clone --depth 1 https://github.com/SpendyYT/tb710fu-linux.git tb710fu/tb710fu-linux
 ```
 
-| 단계 | 결과 |
+순정 롬 패키지의 `dspso.bin` 경로(센서용 ADSP 라이브러리)를 [build/config.env](build/config.env)의 `DSPSO`에 맞춰 둡니다.
+
+### 단계
+
+출력은 WSL `~/tb710fu/out/`에 생깁니다. sudo가 필요한 단계는 비밀번호를 직접 입력합니다.
+
+| 명령 | 하는 일 |
 |---|---|
-| `deps` | clang/lld, qemu-user-static, arch-install-scripts 등 (sudo). Ubuntu `mkbootimg` 패키지는 고장 → `build/mkbootimg.py` 사용 |
-| `kernel` | `sm8650_defconfig` + `USB_UAS=y`, `LLVM=1` 크로스 빌드 |
-| `rootfs` | ALARM aarch64 + Plasma(SDDM, Wayland) + 한글(fcitx5-hangul) → `out/rootfs/`, 모듈/펌웨어/UCM 설치, mkinitcpio → `out/initramfs.img` |
-| `bootimg` | `out/boot.img` (header v2, Image.gz+DTB, `root=PARTUUID=…`) — **서명 안 됨** |
-| `image` | `out/tb710fu-ssd.img.xz` — SSD에 덮어쓰는 디스크 이미지 (루트 파티션 하나) |
-| `sign STOCK_BOOT STOCK_VBMETA` | AOSP testkey_rsa4096로 hash footer → `out/boot-signed.img` (+ 필요하면 `vbmeta-signed.img`) |
+| `build.sh deps` | 빌드 도구 설치 (clang/lld, qemu-user-static, arch-install-scripts 등) |
+| `build.sh kernel` | [build/patches/](build/patches/)의 커널 패치 적용, `sm8650_defconfig` + 추가 옵션, `LLVM=1` 크로스 빌드 |
+| `build.sh rootfs` | ALARM + Plasma(qemu chroot), 모듈·펌웨어·UCM, 센서 스택, 키보드 데몬, initramfs |
+| `build.sh image` | `tb710fu-ssd.img.xz` — SSD에 통째로 쓰는 디스크 이미지 |
+| `build.sh v4 e3` | `v4/e3/` — 슬롯 b 페이로드 (testkey 서명, SHA256SUMS 포함) |
 
-보조 도구 (`build/`, 전부 의존성 없는 Python/셸, `selftest` 있음): `avbinfo.py`(AVB 덤프 보기), `avbsign.py`(서명/vbmeta 재키잉), `mkbootimg.py`(header v2), `qbootctl.sh`(aarch64 크로스 빌드).
+### 설정 ([build/config.env](build/config.env))
 
-### 슬롯 전환
+- **`ROOT_FS`**: 루트와 `/home`의 파일시스템을 고릅니다.
+  - `ext4` (기본): 리눅스가 안 뜰 때 안드로이드에서 마운트해 고칠 수 있습니다.
+  - `btrfs`: 스냅샷과 zstd 압축을 씁니다. 안드로이드 GKI 커널에는 btrfs가 없어서 안드로이드에서는 못 읽습니다.
+  - 예: `ROOT_FS=btrfs build.sh rootfs && ROOT_FS=btrfs build.sh image`
+- **`ROOT_SIZE`**: 첫 부팅 때 루트를 늘릴 크기(기본 64G, 최대 디스크 절반). 나머지는 `/home`이 됩니다.
+- **`PACKAGES`**, 사용자 이름, 임시 비밀번호(`tb710fu` → 첫 부팅 후 `passwd`).
+- **로컬 오버레이**: Git에 올리면 안 되는 파일(Wi-Fi keyfile, SSH 공개키, sshd 활성화 등)은 WSL `~/tb710fu/local-overlay/`에 rootfs 경로 그대로 두면 rootfs 마지막에 덮어씌워집니다.
 
-- Linux → Android: 앱 메뉴 "Android로 재부팅" (`/usr/bin/reboot-to-android`, qbootctl)
-- Android → Linux: [android/switch-to-linux.zip](android/switch-to-linux.zip)을 KernelSU 모듈로 설치 → Action 버튼 (`bootctl` 사용, ROM에 없으면 아무것도 안 바꾸고 종료)
-- Linux는 부팅마다 `qbootctl -m`(서비스)으로 슬롯 성공 표시 → 안 하면 ABL이 몇 번 뒤 Android 슬롯으로 되돌림
+## 설치
 
-설정은 `build/config.env` (PARTUUID, 패키지 목록, 사용자). 첫 사용자 `bmk`의 임시 비밀번호도 여기 있다 → 첫 부팅 후 `passwd`.
+### 1. SSD에 이미지 쓰기
 
-Git에 올리면 안 되는 개인 파일(Wi-Fi keyfile, SSH 공개키, sshd 활성화 링크 등)은 WSL `~/tb710fu/local-overlay/`에 rootfs 경로 그대로 두면 `build.sh rootfs` 마지막에 root 소유로 덮어쓴다.
+`tb710fu-ssd.img.xz`를 balenaEtcher(압축 그대로)나 Rufus(압축 풀어서 DD 모드)로 씁니다. [build/write-usb.ps1](build/write-usb.ps1)도 쓸 수 있습니다(관리자 권한, `-Quick`이면 검증 생략).
 
-루트·`/home` 파일시스템은 `ROOT_FS`로 고른다: `ext4`(기본, 안드로이드에서 마운트해 리눅스를 고칠 수 있음) 또는 `btrfs`(스냅샷, zstd 압축; 안드로이드 GKI 커널엔 btrfs가 없음). 예: `ROOT_FS=btrfs bash build/build.sh rootfs && ROOT_FS=btrfs bash build/build.sh image`
+첫 부팅 때 `tb710fu-firstboot`가 루트를 늘리고 남은 공간을 `/home`으로 만듭니다. 16GB SSD라면 루트 약 9GB, `/home` 약 6GB가 됩니다.
 
-### SSD 쓰기 (USB NVMe, 디스크 전체 지움)
+### 2. 슬롯 b에 기록 (루트 안드로이드)
 
-1. 이미지: [out/tb710fu-ssd.img.xz](out/tb710fu-ssd.img.xz) (원본은 WSL `~/tb710fu/out/`)
-2. **balenaEtcher**(`.img.xz` 바로 가능) 또는 **Rufus**(압축 풀어 `.img`로, DD 모드)로 SSD에 쓰기
-3. 첫 부팅 때 `tb710fu-firstboot.service`가:
-   - 백업 GPT를 디스크 끝으로 옮기고, 루트(p1)를 `ROOT_SIZE`(64G)로 늘림 + `resize2fs`(btrfs면 `btrfs filesystem resize max /`)
-   - 남은 공간 전부를 `/home` 파티션(p2, `HOME_PARTUUID` 고정)으로 만들고 `ROOT_FS`로 포맷, 빌드 때 만든 홈 디렉터리 복사
-   - `/var/lib/tb710fu/firstboot-done`을 남겨 한 번만 실행
-4. `/home`은 `/etc/fstab`에서 `PARTUUID=$HOME_PARTUUID`로 마운트 (`nofail`이라 실패해도 부팅은 됨)
+```bash
+adb push v4/e3 android/flash-slot-b.sh /data/local/tmp/
+adb shell su -c "sh /data/local/tmp/flash-slot-b.sh /data/local/tmp/e3"          # 점검만
+adb shell su -c "sh /data/local/tmp/flash-slot-b.sh /data/local/tmp/e3 --write"  # 기록
+```
 
-SSD는 `ROOT_SIZE` + 여유 공간보다 커야 한다 (128GB 이상 권장).
+슬롯 a는 건드리지 않습니다. 기록 전에 슬롯 b를 백업하고, 기록 후 해시를 다시 확인합니다.
 
-### 기기에 올리기 (락 유지)
+### 3. 슬롯 전환
 
-1. LTBox로 **덤프**: Linux를 올릴 슬롯의 `boot_*`, `vbmeta_*` (+ 전체 백업, Obsidian 04 Phase 1)
-2. `build.sh sign boot_b.img vbmeta_b.img` 실행. 서명은 외부 avbtool 없이 [build/avbsign.py](build/avbsign.py)(순수 Python, AOSP `testkey_rsa4096.pem`)로 한다.
-   - vbmeta가 testkey로 서명돼 있지 않으면 **중단**: 이 펌웨어는 testkey 경로가 막힌 것
-   - 롤백 인덱스와 파티션 크기는 순정 boot 덤프 값을 그대로 쓴다
-   - vbmeta의 `boot` chain 키가 이미 testkey면 → `boot-signed.img`만 만든다
-   - chain 키가 Lenovo 정식 키(`8fcb…`, 8월 펌웨어가 이 경우)면 → `boot` chain 키만 testkey로 바꾸고 재서명한 `vbmeta-signed.img`도 만든다. 나머지 descriptor는 원본 그대로
-   - `python3 -I build/avbsign.py selftest build/testkey_rsa4096.pem`로 자체 점검. 실제 덤프 3개(LTBox/Lenovo 서명) 검증 통과 확인함
-3. 기록: EDL이 되면 LTBox 고급 → 파티션 플래싱, 안 되면 루트 Android에서 `android/flash-slot-b.sh DIR --write` (슬롯 a 체인을 슬롯 b로 복사 + `boot_b`)
-4. 슬롯 전환: KernelSU "Reboot to Linux" 액션, SSD 꽂고 부팅
+- **안드로이드 → 리눅스:** [android/switch-to-linux.zip](android/switch-to-linux.zip)을 KernelSU 모듈로 설치하고 Action 버튼을 누릅니다(부트 컨트롤 HAL로 슬롯 b 활성화 후 재부팅).
+- **리눅스 → 안드로이드:** 앱 메뉴의 "Android로 재부팅".
 
-### 자동 폴백 (슬롯 a로 돌아가기)
+### 자동 폴백
 
 | 상황 | 동작 |
 |---|---|
-| SSD가 없거나 루트 파티션이 안 보임 | initramfs hook `tb710fu-fallback`이 `tb710fu.wait`초(기본 30) 기다린 뒤 `qbootctl -s a` + 재부팅 |
-| 커널 패닉 | `panic=10`으로 10초 뒤 재부팅 → ABL 재시도 횟수 소진 시 슬롯 a |
+| SSD가 없거나 루트가 안 보임 | initramfs가 `tb710fu.wait`초(기본 30) 기다린 뒤 슬롯 a로 바꾸고 재부팅 |
+| 커널 패닉 | `panic=10`으로 재부팅 → ABL 재시도가 소진되면 슬롯 a |
 | 정상 부팅 | `qbootctl-mark-successful`이 슬롯 b를 성공으로 표시 |
-| 데스크톱에서 수동 | 앱 메뉴 "Android로 재부팅" |
 
-대기 시간은 `config.env`의 `CMDLINE`에서 `tb710fu.wait=` 값으로 조정 (boot.img 재생성 필요).
+## 하드웨어 메모
 
-> 미검증: Lenovo ABL이 header v2 + 우리 ramdisk를 그대로 받는지. 실패하면 ABL이 반대 슬롯으로 롤백하거나 EDL로 복구.
+- **키보드 팩:** UART(QUP1 SE7, 921600 8N1) + 전원(LDO B8 3.3V) + 연결 감지(gpio81). 스크램블된 PPP 비슷한 프레임을 [build/rootfs-files/tb710fu-keyboard](build/rootfs-files/tb710fu-keyboard)가 uinput 키보드·클릭패드·태블릿 모드 스위치로 바꿉니다. 뒤로 접으면 키보드 펌웨어가 키를 막고 태블릿 모드 패킷을 보냅니다. 자세한 것은 [docs/keyboard.md](docs/keyboard.md).
+- **gpio81은 홀 센서가 아니라 키보드 연결 감지입니다.** DT에서 `SW_LID`로 잡혀 있어 리드가 "닫힘"으로 보였고, 이제 `SW_DOCK`입니다.
+- **센서:** IMU(Bosch BMI3xx)와 조도(Sensortek STK6B9x)는 ADSP 센서 허브 뒤에 있습니다. [build/rootfs-files/build-sensors.sh](build/rootfs-files/build-sensors.sh)가 hexagonrpcd, libssc, SSC 지원 iio-sensor-proxy를 고정 커밋으로 빌드합니다. 회전 방향이 틀리면 `/etc/udev/rules.d/60-tb710fu-sensors.rules`의 `ACCEL_MOUNT_MATRIX`를 고칩니다.
+- **USB-C 호스트:** pmic_glink가 ADSP에 의존하므로 initramfs에 `qcom_q6v5_pas`와 `adsp.mbn`이 들어갑니다.
+- **펌웨어 경로:** `qcom/sm8650/xiaoxin/gt/*`는 그대로, GMU는 `updates/qcom/`, 토폴로지는 `qcom/sm8650/Lenovo-TB710FU-tplg.bin`, WCN7850 보드 파일은 `updates/`(배포판 것보다 우선).
 
-### 참고: Y700 Gen 3 (TB321FU, 같은 SM8650)
+## 디버깅
 
-- [vitalo233-eng/tb321fu-linux](https://github.com/vitalo233-eng/tb321fu-linux), [SteamOS-ARM-Port](https://github.com/hashtagbasit/SteamOS-ARM-Port)는 둘 다 **언락 또는 OpenABL/GRUB EFI** 전제라 락 걸린 TB710FU에는 그대로 안 맞는다
-- 가져온 아이디어: PARTUUID 루트, 기기 전용 펌웨어 우선 경로, Arch 기반 rootfs 조립
+- **SSH:** 로컬 오버레이에 Wi-Fi와 키를 넣으면 부팅하자마자 `ssh root@<IP>`로 들어갈 수 있습니다(키 인증만).
+- **부팅 로그:** 메인라인 ramoops(`0xac300000`)가 안드로이드와 같은 영역입니다. 리눅스가 조금이라도 돌았다면 안드로이드로 돌아온 뒤 [android/collect-boot-log.sh](android/collect-boot-log.sh)로 모아 [build/bootlog.py](build/bootlog.py)로 판별합니다.
+- **리눅스 디스크 손보기:** 안드로이드에서 [android/fix-linux-usb.sh](android/fix-linux-usb.sh)(ext4만), Windows에서 [build/ext4grab.py](build/ext4grab.py)(WSL이 디스크를 못 붙일 때).
+- **오프라인 검증:** [build/avbverify/](build/avbverify/)(AOSP libavb로 슬롯 체인 검증), [build/qemu-test.sh](build/qemu-test.sh)(ABL과 같은 initrd 구성으로 QEMU 부팅).
 
-## 클론 위치
+## 도구 목록 (`build/`)
+
+| 파일 | 용도 |
+|---|---|
+| `bootv4.py` | 순정 v4 boot/vendor_boot/init_boot를 템플릿으로 재조립 |
+| `avbsign.py` | testkey 서명, vbmeta 해시 갱신·재키잉 (순수 Python, `selftest` 있음) |
+| `avbinfo.py`, `avbcheck.py` | AVB 메타데이터 보기, 슬롯 해시 대조 |
+| `dtcheck.py`, `dtbprop.py` | ABL이 요구하는 DT 노드 점검, 속성 교체 |
+| `ablunpack.py`, `bootimginfo.py` | ABL·부트 이미지 분석 |
+| `ext4grab.py` | Windows에서 ext4 파티션 읽기·차분 적용 |
+| `qemu-test.sh`, `qemu-shell.py` | QEMU 부팅 테스트 |
+| `write-usb.ps1` | 디스크에 이미지 쓰기 + 검증 |
+
+## 출처
 
 | 레포 | 위치 | 용도 |
 |---|---|---|
-| SpendyYT/tb710fu-linux (커널 7.2, `--depth 1`) | **WSL** `~/tb710fu/tb710fu-linux` (`\\wsl$\Ubuntu\home\bmk\tb710fu\tb710fu-linux`) | 커널 소스. NTFS는 대소문자 구분이 없어 커널 트리가 깨지므로 WSL ext4에 둠 |
-| SpendyYT/device-lenovo-tb710fu | `./device-lenovo-tb710fu` | deviceinfo(boot.img 오프셋), ALSA UCM |
-| SpendyYT/linux-firmware-tb710fu | `./linux-firmware-tb710fu` | 펌웨어 블롭 + hexagon 설정 |
-| SpendyYT/tb710fu-mainline | `./tb710fu-mainline` | 동작 현황 |
-| miner7222/LTBox | `./LTBox` | EDL 덤프/플래시, testkey 서명 (Windows 릴리스 바이너리 사용 권장) |
+| [SpendyYT/tb710fu-linux](https://github.com/SpendyYT/tb710fu-linux) | WSL `~/tb710fu/tb710fu-linux` | 커널 7.2 (고정 `4d04410798b5`) |
+| [SpendyYT/device-lenovo-tb710fu](https://github.com/SpendyYT/device-lenovo-tb710fu) | `device-lenovo-tb710fu/` | ALSA UCM |
+| [SpendyYT/linux-firmware-tb710fu](https://github.com/SpendyYT/linux-firmware-tb710fu) | `linux-firmware-tb710fu/` | 펌웨어, 센서 설정·레지스트리 |
+| [SpendyYT/tb710fu-mainline](https://github.com/SpendyYT/tb710fu-mainline) | `tb710fu-mainline/` | 메인라인 동작 현황 |
+| [miner7222/LTBox](https://github.com/miner7222/LTBox) | `LTBox/` | 루트, testkey, EDL 도구 |
 
-## Arch로 옮길 때 필요한 정보 (조사 결과)
-
-- 커널 config: `arch/arm64/configs/sm8650_defconfig`는 완성된 `.config`(clang, `LLVM=1`). Rust/ZBOOT 꺼짐 → `Image.gz`
-  - UFS, ext4, USB storage, DRM_MSM, QRTR, PD_MAPPER이 built-in이라 initramfs 없이도 부팅 가능성 있음
-- DTB: `qcom/sm8650-lenovo-tb710fu.dtb`
-- boot.img (deviceinfo): header v2, pagesize 4096, base 0, kernel 0x8000, ramdisk 0x01000000, dtb 0x01f00000, tags 0x100, DTB append
-  - cmdline: `clk_ignore_unused pd_ignore_unused console=tty0`
-- 펌웨어 경로 (DTS `firmware-name` 기준):
-  - `qcom/sm8650/xiaoxin/gt/*` → `/usr/lib/firmware/qcom/sm8650/xiaoxin/gt/`
-  - `novatek/`, `awinic/` → 그대로
-  - `tplg/Lenovo-TB710FU-tplg.bin` → `/usr/lib/firmware/qcom/sm8650/` (커널은 `qcom/<driver_name=sm8650>/<model>-tplg.bin`을 찾음)
-  - `ath12k/`, `qca/` → `linux-firmware` 패키지와 겹치므로 `/usr/lib/firmware/updates/`에 (우선순위 높음)
-  - 센서(가속도계 등)는 ADSP 센서 허브(SSC) 뒤에 있음 → `/usr/share/qcom/sm8650/Lenovo/tb710fu/`(hexagonrpcd 레이아웃: SpendyYT의 config/registry/socinfo + 스톡 `dspso.bin`의 adsp 라이브러리) + `build/rootfs-files/build-sensors.sh`(hexagonrpc, libssc, SSC 지원 iio-sensor-proxy 소스 빌드)
-- UCM: `HiFi.conf`, `Lenovo-TB710FU.conf` → `/usr/share/alsa/ucm2/Lenovo/tb710fu/`, `conf.d/sm8650/Lenovo-TB710FU.conf` 심볼릭 링크
-- pinned commits: kernel `4d04410798b5`, firmware `45a7e188a45b`
+같은 SM8650인 Y700 Gen 3(TB321FU) 포트([tb321fu-linux](https://github.com/vitalo233-eng/tb321fu-linux), [SteamOS-ARM-Port](https://github.com/hashtagbasit/SteamOS-ARM-Port))는 언락이나 OpenABL을 전제로 해서 그대로 쓰지는 못했고, PARTUUID 루트와 Arch rootfs 조립 아이디어를 가져왔습니다.
