@@ -115,13 +115,15 @@ wsl -d Ubuntu --cd ~ -- bash tb710fu/build/build.sh all     # deps → kernel �
 
 설정은 `build/config.env` (PARTUUID, 패키지 목록, 사용자). 첫 사용자 `bmk`의 임시 비밀번호도 여기 있다 → 첫 부팅 후 `passwd`.
 
+루트·`/home` 파일시스템은 `ROOT_FS`로 고른다: `ext4`(기본, 안드로이드에서 마운트해 리눅스를 고칠 수 있음) 또는 `btrfs`(스냅샷, zstd 압축; 안드로이드 GKI 커널엔 btrfs가 없음). 예: `ROOT_FS=btrfs bash build/build.sh rootfs && ROOT_FS=btrfs bash build/build.sh image`
+
 ### SSD 쓰기 (USB NVMe, 디스크 전체 지움)
 
 1. 이미지: [out/tb710fu-ssd.img.xz](out/tb710fu-ssd.img.xz) (원본은 WSL `~/tb710fu/out/`)
 2. **balenaEtcher**(`.img.xz` 바로 가능) 또는 **Rufus**(압축 풀어 `.img`로, DD 모드)로 SSD에 쓰기
 3. 첫 부팅 때 `tb710fu-firstboot.service`가:
-   - 백업 GPT를 디스크 끝으로 옮기고, 루트(p1)를 `ROOT_SIZE`(64G)로 늘림 + `btrfs filesystem resize max /`
-   - 남은 공간 전부를 `/home` 파티션(p2, `HOME_PARTUUID` 고정)으로 만들고 btrfs 포맷, 빌드 때 만든 홈 디렉터리 복사
+   - 백업 GPT를 디스크 끝으로 옮기고, 루트(p1)를 `ROOT_SIZE`(64G)로 늘림 + `resize2fs`(btrfs면 `btrfs filesystem resize max /`)
+   - 남은 공간 전부를 `/home` 파티션(p2, `HOME_PARTUUID` 고정)으로 만들고 `ROOT_FS`로 포맷, 빌드 때 만든 홈 디렉터리 복사
    - `/var/lib/tb710fu/firstboot-done`을 남겨 한 번만 실행
 4. `/home`은 `/etc/fstab`에서 `PARTUUID=$HOME_PARTUUID`로 마운트 (`nofail`이라 실패해도 부팅은 됨)
 

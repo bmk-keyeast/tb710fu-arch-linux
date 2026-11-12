@@ -186,7 +186,8 @@ EOF
 	log "first boot: grow root, create /home"
 	# The SSD image only carries a small root partition (build.sh image); the disk size is
 	# known only on the device, so the rest is laid out on first boot.
-	printf 'ROOT_SIZE=%s\nHOME_PARTUUID=%s\n' "$ROOT_SIZE" "$HOME_PARTUUID" | sudo tee "$R/etc/tb710fu.conf" >/dev/null
+	printf 'ROOT_SIZE=%s\nHOME_PARTUUID=%s\nROOT_FS=%s\n' "$ROOT_SIZE" "$HOME_PARTUUID" "$ROOT_FS" |
+		sudo tee "$R/etc/tb710fu.conf" >/dev/null
 	sudo install -Dm755 "$HERE/rootfs-files/tb710fu-firstboot" "$R/usr/bin/tb710fu-firstboot"
 	sudo tee "$R/etc/systemd/system/tb710fu-firstboot.service" >/dev/null <<'EOF'
 [Unit]
@@ -206,10 +207,16 @@ ExecStart=/usr/bin/tb710fu-firstboot
 WantedBy=sysinit.target
 EOF
 
-	log "system config + initramfs"
+	log "system config + initramfs ($ROOT_FS)"
+	local fsopt="" fsck=1
+	case "$ROOT_FS" in
+	ext4) ;;
+	btrfs) fsopt=",compress=zstd:1" fsck=0 ;;
+	*) die "ROOT_FS must be ext4 or btrfs" ;;
+	esac
 	sudo tee "$R/etc/fstab" >/dev/null <<EOF
-PARTUUID=$ROOT_PARTUUID  /      btrfs  rw,noatime,compress=zstd:1,commit=60  0 0
-PARTUUID=$HOME_PARTUUID  /home  btrfs  rw,noatime,compress=zstd:1,commit=60,nofail,x-systemd.device-timeout=60s  0 0
+PARTUUID=$ROOT_PARTUUID  /      $ROOT_FS  rw,noatime,commit=60$fsopt  0 $fsck
+PARTUUID=$HOME_PARTUUID  /home  $ROOT_FS  rw,noatime,commit=60$fsopt,nofail,x-systemd.device-timeout=60s  0 $((fsck * 2))
 EOF
 	# no autodetect: it would probe the build host
 	sudo tee "$R/etc/mkinitcpio-tb710fu.conf" >/dev/null <<'EOF'
@@ -380,14 +387,19 @@ image() {
 	# tb710fu-firstboot grows it to ROOT_SIZE and creates /home from the rest of the disk.
 	[ -f "$R/usr/bin/tb710fu-firstboot" ] || die "run: build.sh rootfs"
 	findmnt "$R" >/dev/null && die "$R is still mounted"
-	local img="$OUT/tb710fu-ssd.img" fs="$OUT/root.btrfs" mib
+	local img="$OUT/tb710fu-ssd.img" fs="$OUT/root.$ROOT_FS" mib
+	# fstab and firstboot come from build.sh rootfs
+	grep -qx "ROOT_FS=$ROOT_FS" "$R/etc/tb710fu.conf" || die "rootfs was built for another ROOT_FS: run build.sh rootfs"
 	# content + 30% + 1 GiB headroom; first boot grows it anyway
 	mib=$(( $(sudo du -sm "$R" | cut -f1) * 13 / 10 + 1024 ))
-	log "root filesystem (btrfs) ${mib} MiB from $R"
-	rm -f "$fs" && truncate -s "${mib}M" "$fs"
+	log "root filesystem ($ROOT_FS) ${mib} MiB from $R"
+	sudo rm -f "$fs"
+	case "$ROOT_FS" in
+	ext4) sudo mkfs.ext4 -q -F -L tb710fu-root -d "$R" "$fs" "${mib}M" ;;
 	# ponytail: files land uncompressed (Ubuntu's btrfs-progs predates --compress); new writes use
 	# compress=zstd from fstab, `btrfs filesystem defragment -r -czstd /` on the device compresses the rest
-	sudo mkfs.btrfs -q -f -L tb710fu-root --rootdir "$R" "$fs"
+	btrfs) truncate -s "${mib}M" "$fs" && sudo mkfs.btrfs -q -f -L tb710fu-root --rootdir "$R" "$fs" ;;
+	esac
 	sudo chown "$(id -u):$(id -g)" "$fs"
 	rm -f "$img" "$img.xz"
 	truncate -s $(( mib + 2 ))M "$img"       # 1 MiB GPT/alignment in front, backup GPT behind
