@@ -115,6 +115,8 @@ wsl -d Ubuntu --cd ~ -- bash tb710fu/build/build.sh all     # deps → kernel �
 
 설정은 `build/config.env` (PARTUUID, 패키지 목록, 사용자). 첫 사용자 `bmk`의 임시 비밀번호도 여기 있다 → 첫 부팅 후 `passwd`.
 
+Git에 올리면 안 되는 개인 파일(Wi-Fi keyfile, SSH 공개키, sshd 활성화 링크 등)은 WSL `~/tb710fu/local-overlay/`에 rootfs 경로 그대로 두면 `build.sh rootfs` 마지막에 root 소유로 덮어쓴다.
+
 루트·`/home` 파일시스템은 `ROOT_FS`로 고른다: `ext4`(기본, 안드로이드에서 마운트해 리눅스를 고칠 수 있음) 또는 `btrfs`(스냅샷, zstd 압축; 안드로이드 GKI 커널엔 btrfs가 없음). 예: `ROOT_FS=btrfs bash build/build.sh rootfs && ROOT_FS=btrfs bash build/build.sh image`
 
 ### SSD 쓰기 (USB NVMe, 디스크 전체 지움)

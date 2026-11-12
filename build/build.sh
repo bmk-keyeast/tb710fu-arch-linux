@@ -116,7 +116,8 @@ EOF
 
 	# rebuilt only when the script (pinned commits) changed
 	local stamp="$R/var/lib/tb710fu/build-sensors.sha256"
-	if ! sudo cmp -s <(sha256sum < "$HERE/rootfs-files/build-sensors.sh") "$stamp"; then
+	# (not `sudo cmp <(...)`: sudo closes the process-substitution fd, so that always differed)
+	if [ "$(sudo cat "$stamp" 2>/dev/null)" != "$(sha256sum < "$HERE/rootfs-files/build-sensors.sh")" ]; then
 		log "sensors: hexagonrpcd + libssc + iio-sensor-proxy (qemu build)"
 		sudo install -Dm755 "$HERE/rootfs-files/build-sensors.sh" "$R/usr/local/sbin/tb710fu-build-sensors"
 		sudo arch-chroot "$R" /usr/local/sbin/tb710fu-build-sensors
@@ -267,6 +268,12 @@ lsinitcpio /boot/initramfs-tb710fu.img | grep -q "usr/lib/modules/$(kver)/module
 lsinitcpio /boot/initramfs-tb710fu.img | grep -q "hooks/tb710fu-fallback"
 lsinitcpio /boot/initramfs-tb710fu.img | grep -q "bin/qbootctl"
 EOF
+	# untracked per-builder files (Wi-Fi keyfile, SSH key + sshd enable, ...) kept out of git;
+	# existing directories keep their owner/mode
+	if [ -d "$T/local-overlay" ]; then
+		log "local overlay: $T/local-overlay"
+		tar -C "$T/local-overlay" -c . | sudo tar -C "$R" -x --no-same-owner --no-overwrite-dir
+	fi
 	sudo cp "$R/boot/initramfs-tb710fu.img" "$OUT/initramfs.img"
 	sudo chown "$(id -u):$(id -g)" "$OUT/initramfs.img"
 	sudo umount "$R"
