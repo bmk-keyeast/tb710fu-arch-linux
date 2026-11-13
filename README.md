@@ -18,6 +18,7 @@
 | Wi-Fi, SSH | ✅ | |
 | 키보드 팩 (포고 핀) | 🟡 빌드됨, 기기 미검증 | 프로토콜은 안드로이드 캡처로 검증 → [docs/keyboard.md](docs/keyboard.md) |
 | 화면 회전 센서 | 🟡 빌드됨, 기기 미검증 | ADSP 센서 허브(SSC) 경유, 장착 방향 보정 필요할 수 있음 |
+| 리눅스를 안드로이드 `/data`에 두기 | 🟡 스크립트 준비, 미실행 | 순정 암호화 해제 + 공간 공유 → [docs/userdata.md](docs/userdata.md) |
 | 절전(deep suspend) | ❌ | 깨어나지 않음 → 절전 타깃을 막아 둠 |
 | 화면 끔 후 다시 켜기 | ⚠️ | DPMS on 때 리셋된 적 있음 → 자동 화면 끔 꺼 둠 |
 
@@ -71,6 +72,7 @@ wsl -d Ubuntu --cd ~ -- git clone --depth 1 https://github.com/SpendyYT/tb710fu-
   - `ext4` (기본): 리눅스가 안 뜰 때 안드로이드에서 마운트해 고칠 수 있습니다.
   - `btrfs`: 스냅샷과 zstd 압축을 씁니다. 안드로이드 GKI 커널에는 btrfs가 없어서 안드로이드에서는 못 읽습니다.
   - 예: `ROOT_FS=btrfs build.sh rootfs && ROOT_FS=btrfs build.sh image`
+- **`ROOT_DEV`**: 루트 위치. `ssd`(기본) 또는 `userdata`(안드로이드 `/data` 안의 `/linux` 폴더, [docs/userdata.md](docs/userdata.md)). 슬롯 b 페이로드만 달라집니다(`out/v4/e3`, `out/v4/e3-userdata`).
 - **`ROOT_SIZE`**: 첫 부팅 때 루트를 늘릴 크기(기본 64G, 최대 디스크 절반). 나머지는 `/home`이 됩니다.
 - **`PACKAGES`**, 사용자 이름, 임시 비밀번호(`tb710fu` → 첫 부팅 후 `passwd`).
 - **로컬 오버레이**: Git에 올리면 안 되는 파일(Wi-Fi keyfile, SSH 공개키, sshd 활성화 등)은 WSL `~/tb710fu/local-overlay/`에 rootfs 경로 그대로 두면 rootfs 마지막에 덮어씌워집니다.

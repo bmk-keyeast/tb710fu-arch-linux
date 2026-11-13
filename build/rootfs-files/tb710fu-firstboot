@@ -2,8 +2,16 @@
 # Grow the root partition to ROOT_SIZE (at most half the disk) and turn the rest of the disk into /home.
 set -eu
 . /etc/tb710fu.conf
+done_() { mkdir -p /var/lib/tb710fu && touch /var/lib/tb710fu/firstboot-done; }
 home=/dev/disk/by-partuuid/$HOME_PARTUUID
 root=$(findmnt -no SOURCE /)
+# only the SSD layout from build.sh image; never repartition a disk the root merely lives on
+# (ROOT_DEV=userdata: root is a folder on Android's /data, findmnt says /dev/sdaN[/linux])
+if [ "$(blkid -s PARTUUID -o value "${root%%[[]*}" 2>/dev/null)" != "${ROOT_PARTUUID:-}" ]; then
+	echo "root $root is not the SSD root partition - nothing to do"
+	done_
+	exit 0
+fi
 disk=/dev/$(lsblk -no PKNAME "$root")
 if [ ! -e "$home" ]; then
 	# e.g. a 32GB stick: ~15G root / ~15G home; never smaller than the root already is
@@ -39,5 +47,4 @@ if [ ! -e "$home" ]; then
 	umount "$mnt"
 	rmdir "$mnt"
 fi
-mkdir -p /var/lib/tb710fu
-touch /var/lib/tb710fu/firstboot-done
+done_

@@ -5,22 +5,49 @@ tb_log() {
 	echo "<5>tb710fu: $*" > /dev/kmsg 2>/dev/null
 }
 
+# no usable root: make slot a (Android) active and reboot
+tb_fallback() {
+	tb_log "$* -> slot a"
+	# reboot even if qbootctl fails: slot b is never marked successful, so ABL's
+	# retry counter runs out and falls back to slot a by itself (no keyboard needed)
+	qbootctl -s a || tb_log "qbootctl failed, rebooting for ABL retry fallback"
+	sleep 3
+	reboot -f
+}
+
+# tb710fu.rootdir=/linux: root=<Android userdata>, the system lives in that folder. /data stays
+# mounted at /mnt/android so Linux and Android share its free space.
+tb710fu_rootdir_mount() {
+	local dev
+	dev=$(resolve_device "$root") || dev=
+	mkdir -p /android
+	mount -t f2fs -o rw,noatime "$dev" /android || tb_fallback "can't mount $root (still encrypted?)"
+	[ -x "/android$rootdir/usr/lib/systemd/systemd" ] || tb_fallback "no Linux system in $root:$rootdir"
+	mount --bind "/android$rootdir" "$1"
+	mkdir -p "$1/mnt/android"
+	mount --move /android "$1/mnt/android"
+	tb_log "root = $root:$rootdir"
+}
+
 run_hook() {
-	local wait=30 arg uuid i=0
+	local wait=30 arg path i=0
 	for arg in $(cat /proc/cmdline); do
-		case "$arg" in tb710fu.wait=*) wait="${arg#tb710fu.wait=}" ;; esac
+		case "$arg" in
+		tb710fu.wait=*) wait="${arg#tb710fu.wait=}" ;;
+		tb710fu.rootdir=*) rootdir="${arg#tb710fu.rootdir=}" ;;
+		esac
 	done
-	case "$root" in PARTUUID=*) uuid="${root#PARTUUID=}" ;; *) return 0 ;; esac
+	case "$root" in
+	PARTUUID=*) path="/dev/disk/by-partuuid/${root#PARTUUID=}" ;;
+	PARTLABEL=*) path="/dev/disk/by-partlabel/${root#PARTLABEL=}" ;;
+	*) return 0 ;;
+	esac
+	[ -n "$rootdir" ] && mount_handler=tb710fu_rootdir_mount
 	# the ADSP (pmic_glink) switches USB-C to host mode; udev usually loads this already
 	if modprobe -a qcom_q6v5_pas; then tb_log "ADSP remoteproc driver loaded"; else tb_log "ADSP remoteproc driver failed"; fi
-	while [ ! -e "/dev/disk/by-partuuid/$uuid" ]; do
+	while [ ! -e "$path" ]; do
 		if [ "$i" -ge "$wait" ]; then
-			tb_log "root PARTUUID=$uuid not found after ${wait}s -> slot a ($(ls /sys/bus/usb/devices 2>/dev/null | tr '\n' ' '))"
-			# reboot even if qbootctl fails: slot b is never marked successful, so ABL's
-			# retry counter runs out and falls back to slot a by itself (no keyboard needed)
-			qbootctl -s a || tb_log "qbootctl failed, rebooting for ABL retry fallback"
-			sleep 3
-			reboot -f
+			tb_fallback "root $root not found after ${wait}s ($(ls /sys/bus/usb/devices 2>/dev/null | tr '\n' ' '))"
 			return 0
 		fi
 		[ "$i" = 0 ] && tb_log "waiting up to ${wait}s for the root disk"

@@ -1,0 +1,48 @@
+#!/bin/bash
+# Copy the running system (booted from the SSD) into Android's /data as ROOT_DIR (default /linux),
+# for ROOT_DEV=userdata. Android's encryption must be off first (tb710fu-android-fbe off, then one
+# Android boot so it formats /data). An existing copy is only replaced with --replace.
+#
+#   tb710fu-install-userdata [--replace] [DIR]
+set -euo pipefail
+die() { echo "tb710fu-install-userdata: $*" >&2; exit 1; }
+replace=
+[ "${1:-}" = --replace ] && { replace=1; shift; }
+dir=${1:-/linux}
+ud=/dev/disk/by-partlabel/userdata mnt=/mnt/android
+
+[ "$(id -u)" = 0 ] || die "run as root"
+[ -b "$ud" ] || die "no $ud"
+src=$(findmnt -no SOURCE /)
+case "$src" in "$(readlink -f "$ud")"*) die "already running from userdata" ;; esac
+mkdir -p "$mnt"
+mountpoint -q "$mnt" || mount -t f2fs -o noatime "$ud" "$mnt" ||
+	die "can't mount userdata: still encrypted (run tb710fu-android-fbe off) or not formatted yet (boot Android once)"
+[ -d "$mnt/media" ] || die "$mnt has no Android data yet - boot Android once after turning encryption off"
+
+dst=$mnt${dir}
+if [ -e "$dst" ]; then
+	[ -n "$replace" ] || die "$dst exists (--replace to copy again from scratch)"
+	rm -rf --one-file-system "$dst"
+fi
+need=$(du -sxm / | cut -f1)
+free=$(df -m --output=avail "$mnt" | tail -1)
+[ "$free" -gt $((need + 4096)) ] || die "not enough space on /data: need ${need} MiB + 4 GiB"
+
+echo "copying / (${need} MiB) and /home to $dst ..."
+mkdir -m 755 "$dst"
+# Android formats /data with the casefold feature and sets +F on /data/media; a folder that
+# inherited it would make the Linux root case-insensitive
+lsattr -d "$dst" | cut -d' ' -f1 | grep -q F && { rmdir "$dst"; die "$dst is casefolded (+F) - pick a folder outside /data/media"; }
+# -x: this filesystem only (no /proc, /sys, /dev, /run, /home on its own partition); -a keeps
+# owners, modes, ACLs and xattrs incl. file capabilities (kernel F2FS_FS_SECURITY)
+cp -ax / "$dst"/
+cp -a /home/. "$dst/home"/
+# the initramfs mounts / and /mnt/android; no SSD partitions, no first-boot repartitioning
+printf '# ROOT_DEV=userdata: / (= %s) and /mnt/android are mounted by the initramfs\n' "$dir" > "$dst/etc/fstab"
+sed -i '/^ROOT_DEV=/d' "$dst/etc/tb710fu.conf"
+echo "ROOT_DEV=userdata" >> "$dst/etc/tb710fu.conf"
+mkdir -p "$dst/var/lib/tb710fu" "$dst/mnt/android"
+touch "$dst/var/lib/tb710fu/firstboot-done"
+sync
+echo "done: $dst. Next: write the ROOT_DEV=userdata slot-b payload (build.sh v4 e3 -> out/v4/e3-userdata)."

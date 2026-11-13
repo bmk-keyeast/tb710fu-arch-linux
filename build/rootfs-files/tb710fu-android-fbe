@@ -1,0 +1,87 @@
+#!/bin/bash
+# Turn Android's userdata encryption off (or back on) from Linux, while Android is not running.
+#
+#   tb710fu-android-fbe check   DIR         verify everything, write nothing
+#   tb710fu-android-fbe off     DIR         write DIR/vendor_a.img + vbmeta_a.img, wipe /data + /metadata
+#   tb710fu-android-fbe restore DIR VENDOR  write the stock vendor (ROM super_7.img) + backed-up vbmeta_a, wipe
+#
+# DIR comes from `build/fbe-off.py build` (vendor_a.img, vbmeta_a.img, SHA256SUMS, stock.sha256).
+# Slot a only: vendor_a inside super and vbmeta_a. Wiping /data is unavoidable (an encrypted /data
+# can't be mounted unencrypted); Android formats both partitions on its next boot ("formattable").
+set -euo pipefail
+die() { echo "tb710fu-android-fbe: $*" >&2; exit 1; }
+
+# vendor_a in super: lpdump 2026-11-10 "0 .. 3682135 linear super 22738944" (512-byte sectors);
+# the stock-hash check below refuses to write if this ever moves
+VENDOR_OFF=$((22738944 * 512))
+VENDOR_SIZE=$((3682136 * 512))
+P=/dev/disk/by-partlabel
+SUPER=$P/super VBMETA=$P/vbmeta_a USERDATA=$P/userdata METADATA=$P/metadata
+
+mode=${1:-} dir=${2:-}
+[ -n "$mode" ] && [ -d "$dir" ] || { sed -n '2,10p' "$0"; exit 1; }
+[ "$(id -u)" = 0 ] || die "run as root"
+for d in "$SUPER" "$VBMETA" "$USERDATA" "$METADATA"; do [ -b "$d" ] || die "no $d"; done
+for d in "$USERDATA" "$METADATA"; do
+	findmnt -S "$(readlink -f "$d")" >/dev/null && die "$d is mounted (running from userdata?)"
+done
+[ "$(blockdev --getsize64 "$SUPER")" -ge $((VENDOR_OFF + VENDOR_SIZE)) ] || die "super too small"
+
+want() { awk -v n="$2" '$2 == n {print $1}' "$1"; }
+cur_vendor=$(dd if="$SUPER" bs=1M iflag=skip_bytes,count_bytes skip=$VENDOR_OFF count=$VENDOR_SIZE status=none | sha256sum | cut -d' ' -f1)
+cur_vbmeta=$(sha256sum < "$VBMETA" | cut -d' ' -f1)
+(cd "$dir" && sha256sum -c --quiet SHA256SUMS) || die "$dir: checksum mismatch"
+new_vendor=$(want "$dir/SHA256SUMS" vendor_a.img) new_vbmeta=$(want "$dir/SHA256SUMS" vbmeta_a.img)
+stock_vendor=$(want "$dir/stock.sha256" vendor_a) stock_vbmeta=$(want "$dir/stock.sha256" vbmeta_a)
+vbmeta_size=$(blockdev --getsize64 "$VBMETA")
+
+state() {
+	case "$1" in "$2") echo stock ;; "$3") echo patched ;; *) echo unknown ;; esac
+}
+echo "vendor_a: $(state "$cur_vendor" "$stock_vendor" "$new_vendor")   vbmeta_a: $(state "$cur_vbmeta" "$stock_vbmeta" "$new_vbmeta")"
+
+write_part() { # image device offset size
+	dd if="$1" of="$2" bs=1M oflag=seek_bytes seek="$3" conv=notrunc,fsync status=progress
+	[ "$(dd if="$2" bs=1M iflag=skip_bytes,count_bytes skip="$3" count="$4" status=none | sha256sum | cut -d' ' -f1)" = \
+		"$(head -c "$4" "$1" | sha256sum | cut -d' ' -f1)" ] || die "readback mismatch on $2"
+}
+wipe_data() {
+	# all of /metadata (64 MiB) and the head of /data: Android sees both as wiped and formats them
+	dd if=/dev/zero of="$METADATA" bs=1M conv=fsync status=none || true
+	dd if=/dev/zero of="$USERDATA" bs=1M count=64 conv=fsync status=none
+	sync
+	echo "wiped /metadata and the start of /data"
+}
+
+case "$mode" in
+check)
+	echo "ok: nothing written"
+	;;
+off)
+	[ "$cur_vendor" = "$stock_vendor" ] || [ "$cur_vendor" = "$new_vendor" ] || die "vendor_a is neither stock nor patched - not touching it"
+	[ "$cur_vbmeta" = "$stock_vbmeta" ] || [ "$cur_vbmeta" = "$new_vbmeta" ] || die "vbmeta_a is neither stock nor patched"
+	mkdir -p "$dir/backup"
+	[ -e "$dir/backup/vbmeta_a.img" ] || dd if="$VBMETA" of="$dir/backup/vbmeta_a.img" status=none
+	echo "This wipes Android's /data (apps, files, KernelSU modules). Type WIPE to continue:"
+	read -r ans; [ "$ans" = WIPE ] || die "aborted"
+	write_part "$dir/vendor_a.img" "$SUPER" "$VENDOR_OFF" "$VENDOR_SIZE"
+	write_part "$dir/vbmeta_a.img" "$VBMETA" 0 "$(stat -c %s "$dir/vbmeta_a.img")"
+	wipe_data
+	echo "done. Switch to slot a (reboot-to-android); first boot formats /data unencrypted."
+	echo "check in Android: getprop ro.crypto.state  -> unencrypted"
+	;;
+restore)
+	stock=${3:-}
+	[ -f "$stock" ] || die "restore needs the stock vendor image (ROM super_7.img)"
+	[ "$(sha256sum < "$stock" | cut -d' ' -f1)" = "$stock_vendor" ] || die "$stock is not the stock vendor_a"
+	[ -f "$dir/backup/vbmeta_a.img" ] || die "no $dir/backup/vbmeta_a.img"
+	[ "$(sha256sum < "$dir/backup/vbmeta_a.img" | cut -d' ' -f1)" = "$stock_vbmeta" ] || die "backup vbmeta_a is not stock"
+	echo "This wipes Android's /data again (an unencrypted /data can't be reused encrypted). Type WIPE:"
+	read -r ans; [ "$ans" = WIPE ] || die "aborted"
+	write_part "$stock" "$SUPER" "$VENDOR_OFF" "$VENDOR_SIZE"
+	write_part "$dir/backup/vbmeta_a.img" "$VBMETA" 0 "$vbmeta_size"
+	wipe_data
+	echo "done: stock encryption back on slot a."
+	;;
+*) die "mode must be check, off or restore" ;;
+esac

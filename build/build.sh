@@ -37,7 +37,10 @@ kernel() {
 	# USB NVMe enclosures want UAS; root lives there.
 	# BOOT_CONFIG: ABL appends a bootconfig blob after the ramdisk (vendor_boot v4); the kernel must strip it.
 	# REGULATOR_USERSPACE_CONSUMER: Keyboard Pack pogo power (keyboard-vdd), switched by tb710fu-keyboard
-	"$KSRC/scripts/config" --file "$KSRC/.config" -e USB_UAS -e BOOT_CONFIG -e REGULATOR_USERSPACE_CONSUMER
+	# UNICODE, F2FS_FS_COMPRESSION/LZ4/ZSTD, FS_VERITY: features Android's make_f2fs puts on userdata
+	# (casefold, compression, verity) - without them Linux can't mount /data (ROOT_DEV=userdata).
+	# F2FS_FS_SECURITY: security.* xattrs (file capabilities) for a Linux root stored on f2fs
+	"$KSRC/scripts/config" --file "$KSRC/.config" -e USB_UAS -e BOOT_CONFIG -e REGULATOR_USERSPACE_CONSUMER 		-e UNICODE -e F2FS_FS_SECURITY -e F2FS_FS_COMPRESSION -e F2FS_FS_LZ4 -e F2FS_FS_ZSTD -e FS_VERITY
 	kmake olddefconfig
 	kmake Image.gz dtbs modules
 	log "kernel $(kver) built"
@@ -142,6 +145,9 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
+	log "Android userdata tools: encryption off/restore, copy the system to /data"
+	sudo install -Dm755 -t "$R/usr/local/sbin" "$HERE/rootfs-files/tb710fu-android-fbe" 		"$HERE/rootfs-files/tb710fu-install-userdata"
+
 	log "A/B slot tools"
 	[ -x "$OUT/qbootctl" ] || bash "$HERE/qbootctl.sh"
 	sudo install -Dm755 "$OUT/qbootctl" "$R/usr/bin/qbootctl"
@@ -187,7 +193,7 @@ EOF
 	log "first boot: grow root, create /home"
 	# The SSD image only carries a small root partition (build.sh image); the disk size is
 	# known only on the device, so the rest is laid out on first boot.
-	printf 'ROOT_SIZE=%s\nHOME_PARTUUID=%s\nROOT_FS=%s\n' "$ROOT_SIZE" "$HOME_PARTUUID" "$ROOT_FS" |
+	printf 'ROOT_SIZE=%s\nROOT_PARTUUID=%s\nHOME_PARTUUID=%s\nROOT_FS=%s\n' "$ROOT_SIZE" "$ROOT_PARTUUID" "$HOME_PARTUUID" "$ROOT_FS" |
 		sudo tee "$R/etc/tb710fu.conf" >/dev/null
 	sudo install -Dm755 "$HERE/rootfs-files/tb710fu-firstboot" "$R/usr/bin/tb710fu-firstboot"
 	sudo tee "$R/etc/systemd/system/tb710fu-firstboot.service" >/dev/null <<'EOF'
@@ -303,6 +309,7 @@ v4() {
 	#   v4 e1big  e1 + 64 MiB vendor ramdisk filler (does ABL load a big vendor ramdisk?)
 	local mode="${1:?v4 e1|e1big|e2|e2b|e3}" S="${2:-$T/dump}" py="python3 -I" key="$HERE/testkey_rsa4096.pem"
 	local d="$OUT/v4/$mode" ri psize=100663296
+	[ "$ROOT_DEV" = ssd ] || d="$d-$ROOT_DEV"
 	rm -rf "$d" && mkdir -p "$d"
 	ri=$($py -c 'import sys; sys.path.insert(0, sys.argv[1]); import avbinfo
 print(avbinfo.parse(avbinfo.vbmeta_blob(open(sys.argv[2], "rb").read())[0])["rollback_index"])' "$HERE" "$S/boot_a.img")
@@ -386,7 +393,7 @@ print(avbinfo.parse(avbinfo.vbmeta_blob(open(sys.argv[2], "rb").read())[0])["rol
 	$py "$HERE/avbsign.py" footer "$d/boot_b.img" "$psize" "$ri" "$key" --props-from "$S/boot_a.img"
 	[ "$($py "$HERE/avbsign.py" verify "$d/boot_b.img" "$key")" = OK ] || die "boot_b verify failed"
 	(cd "$d" && sha256sum *.img > SHA256SUMS)
-	log "out/v4/$mode: $(ls "$d" | tr '\n' ' ')(boot rollback index $ri)"
+	log "${d#$OUT/}: $(ls "$d" | tr '\n' ' ')(boot rollback index $ri)"
 }
 
 image() {
