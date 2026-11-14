@@ -2,7 +2,8 @@
 # TB710FU: mainline kernel + Arch Linux ARM/KDE Plasma rootfs + boot.img, built in WSL Ubuntu (x86_64).
 #
 #   build.sh deps      apt deps (sudo)
-#   build.sh kernel    cross-compile kernel (LLVM=1)
+#   build.sh kernel    KERNEL_SRC=armada: fetch the CI kernel (.github/workflows/kernel.yml);
+#                      KERNEL_SRC=spendy: cross-compile $KSRC (LLVM=1). Both stage into $KDIR
 #   build.sh rootfs    ALARM + Plasma via qemu chroot, modules, firmware, UCM, initramfs (sudo)
 #   build.sh bootimg   out/boot.img (header v2, DTB appended), unsigned
 #   build.sh image     out/tb710fu-ssd.img.xz for Rufus/balenaEtcher (sudo)
@@ -17,17 +18,50 @@ R="$OUT/rootfs"
 log() { printf '\033[1;32m[tb710fu]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[tb710fu]\033[0m %s\n' "$*" >&2; exit 1; }
 kmake() { make -C "$KSRC" ARCH=arm64 LLVM=1 -j"$(nproc)" "$@"; }
-kver() { cat "$KSRC/include/config/kernel.release"; }
+# every kernel is staged the same way: $KDIR/lib/modules/<release>/{vmlinuz,dtb/qcom/*.dtb,kernel/..}
+KDIR="$OUT/kernel-$KERNEL_SRC"
+case "$KERNEL_SRC" in
+armada) DTB_NAME=sm8650-lenovo-tb710fu-locked.dtb ;;
+spendy) DTB_NAME=sm8650-lenovo-tb710fu.dtb ;;
+*) printf 'KERNEL_SRC must be armada or spendy\n' >&2; exit 1 ;;
+esac
+kver() { ls "$KDIR/lib/modules" 2>/dev/null | head -1; }
+kmod() { echo "$KDIR/lib/modules/$(kver)"; }
+kimage() { echo "$(kmod)/vmlinuz"; }
+kdtb() { echo "$(kmod)/dtb/qcom/$DTB_NAME"; }
 mkdir -p "$OUT"
 
 deps() {
 	sudo apt-get update
 	sudo apt-get install -y clang lld llvm flex bison bc libssl-dev libelf-dev dwarves cpio \
 		python3 qemu-user-static binfmt-support arch-install-scripts \
-		libarchive-tools gdisk e2fsprogs btrfs-progs rsync curl
+		libarchive-tools gdisk e2fsprogs btrfs-progs rsync curl device-tree-compiler
 }
 
 kernel() {
+	"kernel_$KERNEL_SRC"
+	[ -f "$(kimage)" ] && [ -f "$(kdtb)" ] || die "kernel staging incomplete in $KDIR"
+	log "kernel $(kver) staged in $KDIR"
+}
+
+kernel_armada() {
+	# latest successful .github/workflows/kernel.yml run on main (RUN=<id> picks another);
+	# gh.exe from Windows works too, it just needs a Windows path to download to
+	local gh dl run f
+	gh=$(command -v gh || command -v gh.exe) || die "gh (GitHub CLI) not found"
+	run=${RUN:-$("$gh" run list -R "$GH_REPO" -w kernel.yml -b main -s success -L 1 --json databaseId -q '.[0].databaseId')}
+	[ -n "$run" ] || die "no successful kernel.yml run in $GH_REPO yet"
+	dl="$REPO/out/kernel-download" && rm -rf "$dl" && mkdir -p "$dl"
+	"$gh" run download "$run" -R "$GH_REPO" -n kernel-tb710fu -D "$(wslpath -w "$dl" 2>/dev/null || echo "$dl")"
+	(cd "$dl" && sha256sum -c kernel-tb710fu.sha256) || die "kernel artifact checksum mismatch"
+	rm -rf "$KDIR" && mkdir -p "$KDIR"
+	for f in "$dl"/kernel-*.tar.gz; do tar -C "$KDIR" -xzf "$f"; done
+	[ -f "$dl/rootfs-extra.tar.gz" ] && cp "$dl/rootfs-extra.tar.gz" "$KDIR/"
+	echo "$run" > "$KDIR/RUN"
+	rm -rf "$dl"
+}
+
+kernel_spendy() {
 	[ -f "$KSRC/Makefile" ] || die "no kernel tree at $KSRC"
 	local p
 	for p in "$HERE"/patches/kernel-*.patch; do
@@ -42,12 +76,18 @@ kernel() {
 	# F2FS_FS_SECURITY: security.* xattrs (file capabilities) for a Linux root stored on f2fs
 	"$KSRC/scripts/config" --file "$KSRC/.config" -e USB_UAS -e BOOT_CONFIG -e REGULATOR_USERSPACE_CONSUMER 		-e UNICODE -e F2FS_FS_SECURITY -e F2FS_FS_COMPRESSION -e F2FS_FS_LZ4 -e F2FS_FS_ZSTD -e FS_VERITY
 	kmake olddefconfig
-	kmake Image.gz dtbs modules
-	log "kernel $(kver) built"
+	kmake Image dtbs modules
+	local rel
+	rel=$(cat "$KSRC/include/config/kernel.release")
+	rm -rf "$KDIR" && mkdir -p "$KDIR"
+	kmake modules_install INSTALL_MOD_PATH="$KDIR" INSTALL_MOD_STRIP=1
+	rm -f "$KDIR/lib/modules/$rel/build" "$KDIR/lib/modules/$rel/source"
+	install -Dm644 "$KSRC/arch/arm64/boot/Image" "$KDIR/lib/modules/$rel/vmlinuz"
+	install -Dm644 -t "$KDIR/lib/modules/$rel/dtb/qcom" "$KSRC/arch/arm64/boot/dts/qcom/$DTB_NAME"
 }
 
 rootfs() {
-	[ -f "$KSRC/arch/arm64/boot/Image.gz" ] || die "run: build.sh kernel"
+	[ -f "$(kimage)" ] || die "run: build.sh kernel"
 	ls /proc/sys/fs/binfmt_misc/qemu-aarch64 >/dev/null || die "qemu-aarch64 binfmt not registered"
 	local tgz="$OUT/$(basename "$ALARM_URL")"
 	if [ ! -s "$tgz" ]; then
@@ -84,9 +124,9 @@ EOF
 
 	log "kernel modules"
 	# only this kernel's modules (the release string changes with every tree change, e.g. -dirty)
-	sudo rm -rf "$R/usr/lib/modules"
-	sudo make -C "$KSRC" ARCH=arm64 LLVM=1 modules_install INSTALL_MOD_PATH="$R/usr" INSTALL_MOD_STRIP=1
-	sudo rm -f "$R/usr/lib/modules/$(kver)/build" "$R/usr/lib/modules/$(kver)/source"
+	sudo rm -rf "$R/usr/lib/modules" && sudo mkdir -p "$R/usr/lib/modules"
+	sudo cp -a "$(kmod)" "$R/usr/lib/modules/"
+	sudo chown -R 0:0 "$R/usr/lib/modules"
 
 	log "firmware + UCM"
 	local fw="$REPO/linux-firmware-tb710fu" F="$R/usr/lib/firmware" gt=qcom/sm8650/xiaoxin/gt
@@ -112,10 +152,16 @@ EOF
 	sudo debugfs -R "rdump /adsp $q/dsp" "$DSPSO" 2>/dev/null
 	[ -n "$(ls "$q/dsp/adsp")" ] || die "no ADSP libs extracted from $DSPSO"
 	sudo chmod -R a+rX "$R/usr/share/qcom"
-	local dev="$REPO/device-lenovo-tb710fu" U="$R/usr/share/alsa/ucm2"
-	sudo install -Dm644 -t "$U/Lenovo/tb710fu" "$dev/HiFi.conf" "$dev/Lenovo-TB710FU.conf"
-	sudo mkdir -p "$U/conf.d/sm8650"
-	sudo ln -sf ../../Lenovo/tb710fu/Lenovo-TB710FU.conf "$U/conf.d/sm8650/Lenovo-TB710FU.conf"
+	if [ -f "$KDIR/rootfs-extra.tar.gz" ]; then
+		# ArmadaOS' TB710FU files that go with its kernel: aw882xx amp parameters, NT36532 touch
+		# MP data, speaker topology, ALSA UCM, WirePlumber speaker setup (kernel.yml packs them)
+		sudo tar -C "$R" -xzf "$KDIR/rootfs-extra.tar.gz" --no-same-owner
+	else
+		local dev="$REPO/device-lenovo-tb710fu" U="$R/usr/share/alsa/ucm2"
+		sudo install -Dm644 -t "$U/Lenovo/tb710fu" "$dev/HiFi.conf" "$dev/Lenovo-TB710FU.conf"
+		sudo mkdir -p "$U/conf.d/sm8650"
+		sudo ln -sf ../../Lenovo/tb710fu/Lenovo-TB710FU.conf "$U/conf.d/sm8650/Lenovo-TB710FU.conf"
+	fi
 
 	# rebuilt only when the script (pinned commits) changed
 	local stamp="$R/var/lib/tb710fu/build-sensors.sha256"
@@ -145,8 +191,8 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
-	log "Android userdata tools: encryption off/restore, copy the system to /data"
-	sudo install -Dm755 -t "$R/usr/local/sbin" "$HERE/rootfs-files/tb710fu-android-fbe" 		"$HERE/rootfs-files/tb710fu-install-userdata"
+	log "Android userdata tools + safe slot-b updates from Linux"
+	sudo install -Dm755 -t "$R/usr/local/sbin" "$HERE/rootfs-files/tb710fu-android-fbe" 		"$HERE/rootfs-files/tb710fu-install-userdata" "$HERE/rootfs-files/tb710fu-update-slot-b"
 
 	log "A/B slot tools"
 	[ -x "$OUT/qbootctl" ] || bash "$HERE/qbootctl.sh"
@@ -174,6 +220,9 @@ qbootctl -s "$other"
 systemctl reboot
 EOF
 	sudo chmod 755 "$R/usr/bin/reboot-to-android"
+	# no password for the active session (the touch-only desktop may have no keyboard to type it)
+	sudo install -Dm644 "$HERE/rootfs-files/org.tb710fu.reboot-to-android.policy" \
+		"$R/usr/share/polkit-1/actions/org.tb710fu.reboot-to-android.policy"
 	sudo tee "$R/usr/share/applications/reboot-to-android.desktop" >/dev/null <<'EOF'
 [Desktop Entry]
 Type=Application
@@ -243,7 +292,16 @@ id $USERNAME >/dev/null 2>&1 || useradd -m -G wheel,audio,video,input -s /bin/ba
 echo "$USERNAME:$PASSWORD" | chpasswd
 passwd -l root
 echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/wheel
-grep -q QT_IM_MODULE /etc/environment || printf 'GTK_IM_MODULE=fcitx\nQT_IM_MODULE=fcitx\nXMODIFIERS=@im=fcitx\n' >> /etc/environment
+# touch tablet: KWin's input method = Plasma Keyboard (on-screen keyboard). Apps must use Wayland
+# text-input for it, so no global QT_IM_MODULE/GTK_IM_MODULE=fcitx (earlier builds set them, which
+# kept the on-screen keyboard from ever showing). Korean: switch KWin's input method to Fcitx 5
+# under System Settings > Keyboard > Virtual Keyboard (one or the other, KWin runs a single one).
+sed -i '/^\(GTK_IM_MODULE\|QT_IM_MODULE\|XMODIFIERS\)=/d' /etc/environment
+mkdir -p /etc/xdg
+printf '[Wayland]\nInputMethod=/usr/share/applications/org.kde.plasma.keyboard.desktop\nVirtualKeyboardEnabled=true\n' > /etc/xdg/kwinrc
+# on-screen keyboard languages (default: only the system locale, ko_KR -> no Latin letters); the
+# globe key switches between them
+printf '[General]\nenabledLocales=en_US,ko_KR\n' > /etc/xdg/plasmakeyboardrc
 systemctl enable sddm NetworkManager bluetooth qbootctl-mark-successful tb710fu-firstboot tb710fu-keyboard
 # ALARM defaults: networkd fights NetworkManager; no sshd while the test password is set
 systemctl disable systemd-networkd sshd 2>/dev/null || true
@@ -287,11 +345,12 @@ EOF
 }
 
 bootimg() {
-	local dtb="$KSRC/arch/arm64/boot/dts/qcom/sm8650-lenovo-tb710fu.dtb"
+	local dtb
+	dtb=$(kdtb)
 	[ -f "$OUT/initramfs.img" ] || die "run: build.sh rootfs"
 	# deviceinfo: append_dtb, header v2, pagesize 4096 (offsets in mkbootimg.py).
 	# Ubuntu's mkbootimg package is broken (missing gki module), hence our own writer.
-	cat "$KSRC/arch/arm64/boot/Image.gz" "$dtb" > "$OUT/Image.gz-dtb"
+	{ gzip -9c "$(kimage)"; cat "$dtb"; } > "$OUT/Image.gz-dtb"
 	python3 -I "$HERE/mkbootimg.py" "$OUT/boot.img" "$OUT/Image.gz-dtb" "$OUT/initramfs.img" "$dtb" "$CMDLINE"
 	log "out/boot.img ($(du -h "$OUT/boot.img" | cut -f1)), cmdline: $CMDLINE"
 }
@@ -337,8 +396,7 @@ print(avbinfo.parse(avbinfo.vbmeta_blob(open(sys.argv[2], "rb").read())[0])["rol
 		# ABL's UpdateDeviceTree() aborts the boot (-> fastboot) when /soc/cache-controller is
 		# missing: it appends qcom,sct-config to the LLCC node, which mainline names
 		# system-cache-controller@25000000. An empty stub satisfies ABL; the kernel ignores it.
-		"$KSRC/scripts/dtc/dtc" -q -I dtb -O dts -o "$d/tb710fu.dts" \
-			"$KSRC/arch/arm64/boot/dts/qcom/sm8650-lenovo-tb710fu.dtb"
+		dtc -q -I dtb -O dts -o "$d/tb710fu.dts" "$(kdtb)"
 		printf '\n/ {\n\tsoc@0 {\n\t\tcache-controller {\n\t\t};\n\t};\n};\n' >> "$d/tb710fu.dts"
 		if [ "$mode" = e3 ]; then
 			# with dtbo invalid, ABL takes the appended-DT path (DeviceTreeAppended), which needs an
@@ -347,7 +405,7 @@ print(avbinfo.parse(avbinfo.vbmeta_blob(open(sys.argv[2], "rb").read())[0])["rol
 			# as a second entry in case Lenovo's ABL differs - each board-id entry is matched alone
 			printf '\n/ {\n\tqcom,board-id = <8 0>, <8 0x600>;\n};\n' >> "$d/tb710fu.dts"
 		fi
-		"$KSRC/scripts/dtc/dtc" -q -I dts -O dtb -o "$dtb" "$d/tb710fu.dts"
+		dtc -q -I dts -O dtb -o "$dtb" "$d/tb710fu.dts"
 		rm -f "$d/tb710fu.dts"
 		$py "$HERE/dtcheck.py" "$dtb" || die "DTB lacks a node ABL requires"
 		if [ "$mode" = e2b ]; then
@@ -356,12 +414,16 @@ print(avbinfo.parse(avbinfo.vbmeta_blob(open(sys.argv[2], "rb").read())[0])["rol
 			dtb="$d/board0.dtb"
 		fi
 		$py "$HERE/bootv4.py" boot "$S/boot_a.img" "$d/boot_b.img" \
-			--kernel "$KSRC/arch/arm64/boot/Image" --cmdline "$CMDLINE"
+			--kernel "$(kimage)" --cmdline "$CMDLINE"
 		# USB-C host mode comes from pmic_glink, i.e. from the ADSP: without its remoteproc driver
 		# and firmware in the initramfs dwc3 stays a peripheral and the root USB disk never shows up
-		local m="$R/usr/lib/modules/$(kver)" f fw="usr/lib/firmware/qcom/sm8650/xiaoxin/gt" ov=()
-		for f in $(sed -n 's|^kernel/drivers/remoteproc/qcom_q6v5_pas.ko[^:]*: ||p' "$m/modules.dep") \
-			kernel/drivers/remoteproc/qcom_q6v5_pas.ko.gz modules.dep modules.dep.bin modules.alias \
+		local m="$R/usr/lib/modules/$(kver)" f pas fw="usr/lib/firmware/qcom/sm8650/xiaoxin/gt" ov=()
+		[ -d "$m" ] || die "rootfs has no modules for kernel $(kver): run build.sh rootfs"
+		# .ko, .ko.gz, .ko.zst: whatever this kernel's modules_install produced
+		pas=$(sed -n 's|^\(kernel/drivers/remoteproc/qcom_q6v5_pas\.ko[^:]*\):.*|\1|p' "$m/modules.dep")
+		[ -n "$pas" ] || die "qcom_q6v5_pas not in $m/modules.dep"
+		for f in $(sed -n "s|^${pas//./\\.}: ||p" "$m/modules.dep") \
+			"$pas" modules.dep modules.dep.bin modules.alias \
 			modules.alias.bin modules.softdep modules.symbols modules.symbols.bin modules.builtin \
 			modules.builtin.bin modules.builtin.alias.bin; do
 			[ -r "$m/$f" ] || die "missing $m/$f"

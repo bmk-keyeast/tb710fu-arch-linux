@@ -2,7 +2,8 @@
 """Lenovo Keyboard Pack (pogo pins, UART) -> uinput keyboard, touchpad and tablet-mode switch.
 
 Protocol and pins: docs/keyboard.md. DT (build/patches/kernel-0001-keyboard-pack.patch) gives
-/dev/ttyMSM2, the keyboard-vdd regulator-output and SW_DOCK on gpio81.
+the QUP1 SE7 UART (ttyHS2: qcom_geni_serial names non-console ports ttyHS<alias>),
+the keyboard-vdd regulator-output and SW_DOCK on gpio81.
     tb710fu-keyboard             run (systemd: tb710fu-keyboard.service)
     tb710fu-keyboard --selftest  codec/report checks against captured frames
 """
@@ -15,7 +16,7 @@ import struct
 import sys
 import termios
 
-TTY = "/dev/ttyMSM2"
+UART = "a9c000.serial"  # QUP1 SE7; the tty name (ttyHS2) comes from the kernel, look it up
 VDD = "/sys/devices/platform/keyboard-vdd/state"
 GPIOCHIP = "/sys/bus/platform/devices/f100000.pinctrl/gpiochip*"
 TX_EN = 100  # TLMM line: host->keyboard TX buffer enable
@@ -174,7 +175,9 @@ class Gpio:
 
 
 def open_tty():
-    fd = os.open(TTY, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+    name = next(t for t in os.listdir("/sys/class/tty")
+                if UART in os.path.realpath(f"/sys/class/tty/{t}/device"))
+    fd = os.open("/dev/" + name, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
     a = termios.tcgetattr(fd)
     a[0] = a[1] = a[3] = 0
     a[2] = termios.CS8 | termios.CREAD | termios.CLOCAL

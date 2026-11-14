@@ -49,18 +49,34 @@ jobs:
           export CCACHE_DIR="$HOME/.ccache"
           WORK_DIR="$RUNNER_TEMP/kb" OUT_DIR="$RUNNER_TEMP/kout" bash scripts/build-kernel.sh
 
-      - name: Pack Image, DTBs and modules
+      - name: Pack Image, DTBs, modules and Armada's TB710FU rootfs files
         run: |
           stage=$(ls -d "$RUNNER_TEMP"/kb/staging-*)
           kver=${stage##*/staging-}
           echo "kernel release: $kver"
+          test -f "$stage/lib/modules/$kver/vmlinuz"
           test -f "$stage/lib/modules/$kver/dtb/qcom/sm8650-lenovo-tb710fu-locked.dtb"
-          echo "$kver" > "$stage/lib/modules/$kver/KVER"
-          tar -C "$stage" -cf - lib | zstd -T0 -10 > "kernel-$kver.tar.zst"
-          sha256sum "kernel-$kver.tar.zst" | tee "kernel-$kver.tar.zst.sha256"
+          tar -C "$stage" -czf "kernel-$kver.tar.gz" lib
+          # files that go with this kernel's TB710FU drivers (build.sh rootfs extracts them over /)
+          x=$(mktemp -d) a=armada
+          # ADSP/CDSP/zap images stay this repo's (linux-firmware-tb710fu): proven with USB host + sensors
+          mkdir -p "$x/usr/lib/firmware/qcom/sm8650/xiaoxin/gt"
+          cp -r $a/devices/lenovo-tb710fu/firmware/novatek "$x/usr/lib/firmware/"
+          cp $a/devices/lenovo-tb710fu/firmware/qcom/sm8650/xiaoxin/gt/aw882xx_acf.bin "$x/usr/lib/firmware/qcom/sm8650/xiaoxin/gt/"
+          (cd $a/system_files && cp --parents -r \
+            usr/lib/firmware/qcom/sm8650/Lenovo-TB710FU-tplg.bin \
+            usr/share/alsa/ucm2/Lenovo/TB710FU \
+            usr/share/alsa/ucm2/conf.d/sm8650/Lenovo-TB710FU.conf \
+            usr/share/wireplumber/wireplumber.conf.d/53-lenovo-tb710fu-speakers.conf "$x/")
+          tar -C "$x" --owner=0 --group=0 -czf rootfs-extra.tar.gz .
+          tar -tzf rootfs-extra.tar.gz
+          sha256sum kernel-*.tar.gz rootfs-extra.tar.gz | tee kernel-tb710fu.sha256
 
       - uses: actions/upload-artifact@v4
         with:
           name: kernel-tb710fu
-          path: kernel-*.tar.zst*
+          path: |
+            kernel-*.tar.gz
+            rootfs-extra.tar.gz
+            kernel-tb710fu.sha256
           retention-days: 30

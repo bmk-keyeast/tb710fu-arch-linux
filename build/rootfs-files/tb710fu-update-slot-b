@@ -1,0 +1,48 @@
+#!/bin/bash
+# Write a slot-b payload (build.sh v4 -> out/v4/<mode>/) from the running Linux, safely:
+# only *_b partitions, readback-verified, and the slot re-armed so a broken payload falls back to
+# Android on its own instead of boot-looping.
+#
+#   tb710fu-update-slot-b DIR          check only
+#   tb710fu-update-slot-b DIR --write  write, then re-arm slot b (reboot yourself to test)
+#
+# Why the re-arm: this Linux marks slot b "successful" on every good boot
+# (qbootctl-mark-successful). ABL never counts down retries of a successful slot, so a payload
+# that resets before userspace would loop forever (2026-11-15). `qbootctl -s b` rewrites the A/B
+# flags to active, retry count 1, not successful: one failed boot and ABL switches to slot a.
+set -euo pipefail
+die() { echo "tb710fu-update-slot-b: $*" >&2; exit 1; }
+dir=${1:-} write=${2:-}
+[ -d "$dir" ] || { sed -n '2,8p' "$0"; exit 1; }
+[ "$(id -u)" = 0 ] || die "run as root"
+cd "$dir"
+sha256sum -c --quiet SHA256SUMS || die "payload checksum mismatch"
+P=/dev/disk/by-partlabel
+plan=()
+for img in *_b.img; do
+	part=${img%.img}
+	case "$part" in *_a) die "refusing to write slot a ($part)" ;; esac
+	[ -b "$P/$part" ] || die "no partition $part"
+	[ "$(stat -c %s "$img")" -le "$(blockdev --getsize64 "$P/$part")" ] || die "$img larger than $part"
+	n=$(stat -c %s "$img")
+	if [ "$(head -c "$n" "$P/$part" | sha256sum | cut -d' ' -f1)" = "$(sha256sum < "$img" | cut -d' ' -f1)" ]; then
+		echo "  $part: unchanged"
+	else
+		echo "  $part: will be written"
+		plan+=("$part")
+	fi
+done
+[ ${#plan[@]} -gt 0 ] || { echo "slot b already holds this payload"; }
+[ "$write" = --write ] || { echo "check OK (add --write)"; exit 0; }
+
+for part in "${plan[@]}"; do
+	n=$(stat -c %s "$part.img")
+	dd if="$part.img" of="$P/$part" bs=1M conv=fsync status=none
+	[ "$(head -c "$n" "$P/$part" | sha256sum | cut -d' ' -f1)" = "$(sha256sum < "$part.img" | cut -d' ' -f1)" ] ||
+		die "readback mismatch on $part - slot b is half written: re-run, or boot Android (reboot-to-android)"
+	echo "  ok $part"
+done
+sync
+qbootctl -s b
+qbootctl | sed -n '/_b/,$p' | head -8
+echo "slot b re-armed (not successful, 1 retry): a failing boot returns to Android. Reboot to test."

@@ -47,8 +47,12 @@ ABL을 통과하려면 세 가지가 필요했습니다.
 ### 준비
 
 ```bash
-git clone --recurse-submodules https://github.com/bmk-mikufan/tb710fu-arch-linux.git
-# 커널 트리는 WSL ext4에 (NTFS는 대소문자를 구분하지 않아 커널 트리가 깨짐)
+git clone --recurse-submodules https://github.com/bmk-keyeast/tb710fu-arch-linux.git
+```
+
+**커널**은 기본으로 [ArmadaOS Freedom](https://github.com/ArmadaOS-Freedom/armadaos-freedom)의 통합 커널(Linux 7.2.6 + TB710FU 지원)에 이 저장소의 오버레이 [kernel/armada-overlay/tb710fu-locked](kernel/armada-overlay/tb710fu-locked)(키보드 팩 UART, 부팅 옵션)를 얹어 GitHub Actions([kernel.yml](.github/workflows/kernel.yml), ARM 러너)에서 빌드합니다. `build.sh kernel`은 그 결과물을 내려받기만 합니다(`gh` 필요). 예전 SpendyYT 트리로 로컬 빌드하려면 `KERNEL_SRC=spendy`와 함께 WSL ext4에 트리를 둡니다:
+
+```bash
 wsl -d Ubuntu --cd ~ -- git clone --depth 1 https://github.com/SpendyYT/tb710fu-linux.git tb710fu/tb710fu-linux
 ```
 
@@ -61,7 +65,7 @@ wsl -d Ubuntu --cd ~ -- git clone --depth 1 https://github.com/SpendyYT/tb710fu-
 | 명령 | 하는 일 |
 |---|---|
 | `build.sh deps` | 빌드 도구 설치 (clang/lld, qemu-user-static, arch-install-scripts 등) |
-| `build.sh kernel` | [build/patches/](build/patches/)의 커널 패치 적용, `sm8650_defconfig` + 추가 옵션, `LLVM=1` 크로스 빌드 |
+| `build.sh kernel` | CI 커널 내려받기(`KERNEL_SRC=armada`, 기본) 또는 SpendyYT 트리 로컬 빌드(`spendy`). 둘 다 `out/kernel-<종류>/lib/modules/<버전>/`에 같은 모양으로 둡니다 |
 | `build.sh rootfs` | ALARM + Plasma(qemu chroot), 모듈·펌웨어·UCM, 센서 스택, 키보드 데몬, initramfs |
 | `build.sh image` | `tb710fu-ssd.img.xz` — SSD에 통째로 쓰는 디스크 이미지 |
 | `build.sh v4 e3` | `v4/e3/` — 슬롯 b 페이로드 (testkey 서명, SHA256SUMS 포함) |
@@ -99,6 +103,10 @@ adb shell su -c "sh /data/local/tmp/flash-slot-b.sh /data/local/tmp/e3 --write" 
 
 - **안드로이드 → 리눅스:** [android/switch-to-linux.zip](android/switch-to-linux.zip)을 KernelSU 모듈로 설치하고 Action 버튼을 누릅니다(부트 컨트롤 HAL로 슬롯 b 활성화 후 재부팅).
 - **리눅스 → 안드로이드:** 앱 메뉴의 "Android로 재부팅".
+
+### 리눅스에서 슬롯 b 고쳐 쓰기
+
+리눅스 안에서 새 페이로드를 쓸 때는 **반드시** `sudo tb710fu-update-slot-b DIR --write`를 씁니다. 슬롯 b만 쓰고 다시 읽어 확인한 뒤 `qbootctl -s b`로 슬롯을 다시 무장합니다(성공 표시 지움, 재시도 1회). 리눅스는 정상 부팅마다 슬롯 b를 "성공"으로 표시하는데, ABL은 성공 표시가 있는 슬롯의 재시도 횟수를 줄이지 않습니다. 그래서 `dd`로 직접 쓰고 재부팅하면 망가진 페이로드가 끝없이 재부팅을 반복합니다(2026-11-15에 실제로 겪어 EDL로 복구).
 
 ### 자동 폴백
 
