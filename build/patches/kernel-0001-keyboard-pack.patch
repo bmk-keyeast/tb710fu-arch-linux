@@ -1,5 +1,5 @@
 diff --git a/arch/arm64/boot/dts/qcom/sm8650-lenovo-tb710fu.dts b/arch/arm64/boot/dts/qcom/sm8650-lenovo-tb710fu.dts
-index 96daa976b..33f9a5d9c 100644
+index 96daa976b..d20fb5ffe 100644
 --- a/arch/arm64/boot/dts/qcom/sm8650-lenovo-tb710fu.dts
 +++ b/arch/arm64/boot/dts/qcom/sm8650-lenovo-tb710fu.dts
 @@ -28,6 +28,7 @@ / {
@@ -38,15 +38,17 @@ index 96daa976b..33f9a5d9c 100644
  			debounce-interval = <15>;
  			linux,can-disable;
  			wakeup-source;
-@@ -379,7 +386,7 @@ vreg_l5b_3p1: ldo5 {
+@@ -379,8 +386,8 @@ vreg_l5b_3p1: ldo5 {
  
  		vreg_l8b_1p8: ldo8 {
                          regulator-name = "vreg_l8b_1p8";
 -                        regulator-min-microvolt = <1800000>;
-+                        regulator-min-microvolt = <3300000>;
-                         regulator-max-microvolt = <3300000>;
+-                        regulator-max-microvolt = <3300000>;
++                        regulator-min-microvolt = <3304000>;
++                        regulator-max-microvolt = <3304000>;
                          regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
                          regulator-allow-set-load;
+                         regulator-allowed-modes = <RPMH_REGULATOR_MODE_LPM
 @@ -647,6 +654,29 @@ vreg_l3i_1p2: ldo3 {
  // Enable i2c
  &qupv3_id_0 {
