@@ -1,0 +1,66 @@
+# Kernel for the slot-b boot: ArmadaOS Freedom's unified kernel (Linux 7.2.6 + its patches and
+# TB710FU board support) with this repo's overlay kernel/armada-overlay/tb710fu-locked.
+# Built natively on an arm64 runner; build/build.sh kernel downloads the artifact.
+name: kernel
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - kernel/**
+      - .github/workflows/kernel.yml
+
+env:
+  # ArmadaOS-Freedom/armadaos-freedom main, 2026-11-14
+  ARMADA_SHA: b75a6d48e006782b886627dc2dee2b8691aa64f6
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev dwarves \
+            zstd xz-utils cpio patch curl python3 kmod ccache git
+
+      - name: ArmadaOS kernel tree + our overlay
+        run: |
+          git init -q armada
+          git -C armada fetch -q --depth 1 https://github.com/ArmadaOS-Freedom/armadaos-freedom.git "$ARMADA_SHA"
+          git -C armada checkout -q FETCH_HEAD
+          cp -r kernel/armada-overlay/tb710fu-locked armada/packages/kernel/overlays/
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ env.ARMADA_SHA }}-${{ hashFiles('kernel/**') }}
+          restore-keys: ccache-${{ env.ARMADA_SHA }}-
+
+      - name: Build
+        working-directory: armada/packages/kernel
+        env:
+          KERNEL_OVERLAYS: tb710fu-locked
+        run: |
+          export CCACHE_DIR="$HOME/.ccache"
+          WORK_DIR="$RUNNER_TEMP/kb" OUT_DIR="$RUNNER_TEMP/kout" bash scripts/build-kernel.sh
+
+      - name: Pack Image, DTBs and modules
+        run: |
+          stage=$(ls -d "$RUNNER_TEMP"/kb/staging-*)
+          kver=${stage##*/staging-}
+          echo "kernel release: $kver"
+          test -f "$stage/lib/modules/$kver/dtb/qcom/sm8650-lenovo-tb710fu-locked.dtb"
+          echo "$kver" > "$stage/lib/modules/$kver/KVER"
+          tar -C "$stage" -cf - lib | zstd -T0 -10 > "kernel-$kver.tar.zst"
+          sha256sum "kernel-$kver.tar.zst" | tee "kernel-$kver.tar.zst.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kernel-tb710fu
+          path: kernel-*.tar.zst*
+          retention-days: 30

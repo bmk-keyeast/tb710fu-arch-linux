@@ -1,0 +1,67 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Lenovo TB710FU booted by the stock ABL from A/B slot b (locked bootloader, GKI v4 layout,
+ * tb710fu-arch-linux) instead of kShimC: ArmadaOS' board file plus the Lenovo Keyboard Pack.
+ *
+ * Keyboard Pack (docs/keyboard.md in tb710fu-arch-linux): 2-wire UART on QUP1 SE7 at
+ * 921600 8N1, plug detect on gpio81, host TX enable on gpio100. Its pogo VDD (PM8550 LDO8 at
+ * 3.3 V) is deliberately not described yet: switching that rail at boot reset the tablet.
+ */
+#include "sm8650-lenovo-tb710fu.dts"
+
+/ {
+	aliases {
+		serial2 = &uart7;
+	};
+};
+
+/* gpio81 is the Keyboard Pack plug detect (stock lenovo_kb plug-gpios), not a lid hall sensor:
+ * low = keyboard attached */
+&{/gpio-keys/event-hall-sensor} {
+	label = "Keyboard Pack";
+	linux,code = <SW_DOCK>;
+};
+
+&qupv3_id_0 {
+	uart7: serial@a9c000 {
+		compatible = "qcom,geni-uart";
+		reg = <0 0x00a9c000 0 0x4000>;
+
+		interrupts = <GIC_SPI 579 IRQ_TYPE_LEVEL_HIGH 0>;
+
+		clocks = <&gcc GCC_QUPV3_WRAP1_S7_CLK>;
+		clock-names = "se";
+
+		interconnects = <&clk_virt MASTER_QUP_CORE_1 QCOM_ICC_TAG_ALWAYS
+				 &clk_virt SLAVE_QUP_CORE_1 QCOM_ICC_TAG_ALWAYS>,
+				<&gem_noc MASTER_APPSS_PROC QCOM_ICC_TAG_ACTIVE_ONLY
+				 &config_noc SLAVE_QUP_1 QCOM_ICC_TAG_ACTIVE_ONLY>;
+		interconnect-names = "qup-core",
+				     "qup-config";
+
+		power-domains = <&rpmhpd RPMHPD_CX>;
+		operating-points-v2 = <&qup_opp_table_100mhz>;
+
+		pinctrl-0 = <&qup_uart7_default>, <&kb_tx_en_default>;
+		pinctrl-names = "default";
+	};
+};
+
+&tlmm {
+	qup_uart7_default: qup-uart7-default-state {
+		/* TX, RX */
+		pins = "gpio62", "gpio63";
+		function = "qup1_se7";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	/* host -> keyboard TX buffer enable (stock lenovo_kb tx-en-gpios), driven by tb710fu-keyboard */
+	kb_tx_en_default: kb-tx-en-default-state {
+		pins = "gpio100";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+		output-low;
+	};
+};
