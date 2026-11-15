@@ -8,6 +8,8 @@
 #   build.sh bootimg   out/boot.img (header v2, DTB appended), unsigned
 #   build.sh image     out/tb710fu-ssd.img.xz for Rufus/balenaEtcher (sudo)
 #   build.sh personalize  CI rootfs (rootfs.yml) + local-overlay + DSP libs -> out/tb710fu-ssd.img (sudo)
+#   build.sh initramfs    out/initramfs.img from the rootfs-latest release (for kshim, no 1.6 GB download)
+#   build.sh personal     out/tb710fu-personal.tar (local-overlay + DSP libs) for android/install-linux-data.sh
 #   build.sh v4 e1|e1big|e2|e2b|e3 [STOCK_DIR]   locked-bootloader GKI v4 slot-b payload -> out/v4/<mode>/
 #   build.sh kshim [STOCK_DIR]   kShimC menu boot_a (stock Android + this Linux) -> out/kshim/boot_a.img
 #   build.sh sign STOCK_BOOT STOCK_VBMETA   testkey AVB footer -> out/boot-signed.img (+ out/vbmeta-signed.img if needed)
@@ -341,6 +343,9 @@ mkdir -p /etc/xdg
 printf '[Daemon]\nAutolock=false\nLockOnResume=false\n' > /etc/xdg/kscreenlockerrc
 for g in AC Battery LowBattery; do printf '[%s][Display]\nDimDisplayWhenIdle=false\nTurnOffDisplayWhenIdle=false\n\n[%s][SuspendAndShutdown]\nAutoSuspendAction=0\n\n' \$g \$g; done > /etc/xdg/powerdevilrc
 rm -rf /var/cache/pacman/pkg/*
+# file capabilities (ping, kwin_wayland, ...): Android's busybox tar drops xattrs when the rootfs
+# tarball is unpacked into /data/linux, so tb710fu-firstboot re-applies them from this list
+mkdir -p /usr/share/tb710fu && { getcap -r /usr 2>/dev/null || true; } > /usr/share/tb710fu/file-caps
 # host (x86) depmod leaves modules.dep empty for these aarch64 .ko.gz
 depmod $(kver)
 rm -f /boot/initramfs-tb710fu.img
@@ -371,6 +376,32 @@ dsp_libs() {
 	sudo debugfs -R "rdump /adsp $q" "$DSPSO" 2>/dev/null
 	[ -n "$(ls "$q/adsp")" ] || die "no ADSP libs extracted from $DSPSO"
 	sudo chmod -R a+rX "$q"
+}
+
+# out/initramfs.img from the latest rootfs.yml release (60 MB): enough for build.sh kshim,
+# without the 1.6 GB SSD image artifact
+initramfs() {
+	local url="https://github.com/$GH_REPO/releases/download/rootfs-latest"
+	curl -fL -o "$OUT/initramfs.img.part" "$url/initramfs.img"
+	curl -fsL "$url/SHA256SUMS" | awk '$2 == "initramfs.img" {print $1 "  '"$OUT"'/initramfs.img.part"}' |
+		sha256sum -c - || die "initramfs.img checksum mismatch"
+	mv "$OUT/initramfs.img.part" "$OUT/initramfs.img"
+	log "out/initramfs.img from the rootfs-latest release"
+}
+
+personal() {
+	# out/tb710fu-personal.tar: what the public CI rootfs leaves out (local-overlay: Wi-Fi keyfile,
+	# SSH key, sshd enable; the ROM's DSP libraries), owned by root, for android/install-linux-data.sh
+	local s="$OUT/personal.stage" q="usr/share/qcom/sm8650/Lenovo/tb710fu/dsp"
+	[ -r "$DSPSO" ] || die "DSPSO ($DSPSO) not readable: stock dspso.bin from the ROM"
+	rm -rf "$s" && mkdir -p "$s/$q"
+	[ -d "$T/local-overlay" ] && cp -a "$T/local-overlay/." "$s/"
+	debugfs -R "rdump /adsp $s/$q" "$DSPSO" 2>/dev/null
+	[ -n "$(ls "$s/$q/adsp")" ] || die "no ADSP libs extracted from $DSPSO"
+	chmod -R a+rX "$s/usr"
+	tar -C "$s" --owner=0 --group=0 --numeric-owner -cf "$OUT/tb710fu-personal.tar" .
+	rm -rf "$s"
+	log "out/tb710fu-personal.tar ($(du -h "$OUT/tb710fu-personal.tar" | cut -f1)): keep it private"
 }
 
 personalize() {
@@ -619,10 +650,10 @@ print(v["pubkey_sha1"], c[0] if c else "none", b["rollback_index"])' "$HERE" "$v
 }
 
 case "${1:-}" in
-deps|kernel|rootfs|bootimg|image|personalize) "$1" ;;
+deps|kernel|rootfs|bootimg|image|personalize|personal|initramfs) "$1" ;;
 v4) shift; v4 "$@" ;;
 kshim) shift; kshim "$@" ;;
 sign) shift; sign "$@" ;;
 all) deps; kernel; rootfs; bootimg; image ;;
-*) sed -n '2,13p' "$0"; exit 1 ;;
+*) sed -n '2,15p' "$0"; exit 1 ;;
 esac

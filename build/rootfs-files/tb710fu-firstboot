@@ -8,7 +8,12 @@ root=$(findmnt -no SOURCE /)
 # only the SSD layout from build.sh image; never repartition a disk the root merely lives on
 # (ROOT_DEV=userdata: root is a folder on Android's /data, findmnt says /dev/sdaN[/linux])
 if [ "$(blkid -s PARTUUID -o value "${root%%[[]*}" 2>/dev/null)" != "${ROOT_PARTUUID:-}" ]; then
-	echo "root $root is not the SSD root partition - nothing to do"
+	echo "root $root is not the SSD root partition - nothing to repartition"
+	# unpacked by Android's busybox tar (android/install-linux-data.sh): xattrs, i.e. file
+	# capabilities, did not survive; the rootfs build listed them
+	[ -f /usr/share/tb710fu/file-caps ] && while read -r f caps; do
+		[ -e "$f" ] && setcap "$caps" "$f" || true
+	done < /usr/share/tb710fu/file-caps
 	done_
 	exit 0
 fi

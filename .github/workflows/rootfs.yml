@@ -19,7 +19,7 @@ on:
       - .github/workflows/rootfs.yml
 
 permissions:
-  contents: read
+  contents: write   # the rootfs-latest release
   actions: read
 
 jobs:
@@ -50,6 +50,23 @@ jobs:
           cd "$HOME/tb710fu/out"
           sha256sum tb710fu-ssd.img.xz initramfs.img | tee rootfs-tb710fu.sha256
           df -h /
+
+      - name: Rootfs tarball (for /data/linux, android/install-linux-data.sh)
+        run: |
+          cd "$HOME/tb710fu/out"
+          # no SSD image left on disk needed past this point
+          sudo tar -C rootfs --numeric-owner --xattrs --acls -cpf - . | xz -T0 -6 > tb710fu-rootfs.tar.xz
+          sha256sum tb710fu-rootfs.tar.xz initramfs.img | tee SHA256SUMS
+          ls -l tb710fu-rootfs.tar.xz
+
+      # public, plain-URL downloads: the tablet fetches the tarball itself, build.sh initramfs the
+      # 60 MB initramfs. Nothing private is in either (local-overlay/DSP libs come from the PC).
+      - name: Release rootfs-latest
+        if: github.ref == 'refs/heads/main'
+        run: |
+          cd "$HOME/tb710fu/out"
+          gh release delete rootfs-latest -R "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
+          gh release create rootfs-latest -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease             --title "rootfs (latest CI build)"             --notes "Arch Linux ARM rootfs for /data/linux and the initramfs, from $GITHUB_SHA (run $GITHUB_RUN_ID). Install: android/install-linux-data.sh."             tb710fu-rootfs.tar.xz initramfs.img SHA256SUMS
 
       - uses: actions/upload-artifact@v4
         with:
