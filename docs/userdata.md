@@ -44,7 +44,12 @@
    `/data/linux`에 풉니다. 데이터가 걱정되면 Wi-Fi에서 하거나 PC에서 받아 `adb push`로 같은 자리에 둡니다.
 3. **PC:** `build.sh initramfs`(60 MB) → `ROOT_DEV=userdata build.sh kshim` → `out/kshim/boot_a.img`.
 4. **boot_a 쓰기:** `adb push`한 뒤 `su -c dd`로 쓰고 다시 읽어 해시를 확인합니다(또는 EDL, LUN4 섹터 112006).
-5. 재부팅 → 메뉴에서 Arch Linux. `/data/linux`가 없으면 initramfs가 30초 뒤 재부팅해서 안드로이드로 갑니다.
+5. **슬롯 b = 튕김 이미지(`build.sh v4 bounce`):** `adb push out/v4/bounce /data/local/tmp/bounce` →
+   `su -c "sh flash-slot-b.sh /data/local/tmp/bounce --write"`. ABL이 슬롯 b로 넘어가도 커널이 곧바로
+   `qbootctl -s a` 후 재부팅합니다(ADSP·USB-C는 건드리지 않음). 한 번 일부러 확인할 것: 안드로이드에서
+   `service call android.hardware.boot.IBootControl/default 9 i32 1`로 슬롯 b를 활성화하고 재부팅 → 슬롯 a의
+   kShimC 메뉴로 돌아와야 정상.
+6. 재부팅 → 메뉴에서 Arch Linux. `/data/linux`가 없으면 initramfs가 30초 뒤 재부팅해서 안드로이드로 갑니다.
    첫 부팅에 `tb710fu-firstboot`가 파일 capability를 다시 붙입니다(busybox tar는 xattr을 버림).
 
 아래는 SSD를 거치던 이전 순서입니다.
