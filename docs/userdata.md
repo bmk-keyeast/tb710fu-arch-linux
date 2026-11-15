@@ -60,7 +60,15 @@ sudo tb710fu-install-userdata
 슬롯 b에 씁니다. 이제 SSD 없이 리눅스가 `/data/linux`에서 뜹니다. 루트가 안 보이면 initramfs가 슬롯 a로
 돌아갑니다.
 
-## 검증 (2026-11-15, 기기에서는 아직 안 돌림)
+## 기기 결과 (2026-11-15) ✔
+
+EDL로 `out/fbe-off`의 vendor_a(super LUN0 섹터 2851976)와 vbmeta_a를 쓰고 metadata 전체와 userdata 앞
+64 MiB를 0으로 지운 뒤(모두 다시 읽어 일치) 부팅: `ro.crypto.state=unsupported`, `/data`는
+`/dev/block/sda14`를 그대로 마운트(dm-default-key 없음, `inlinecrypt` 없음), `verifiedbootstate=green`.
+boot_a는 kShimC 이미지(`build.sh kshim`)였고 문제없이 같이 동작. 데이터 초기화로 KernelSU 매니저 앱은
+다시 설치해야 함(`su` 없음).
+
+## 검증 (2026-11-15, 기기에 쓰기 전)
 
 ✔ = 롬·바이너리에서 확인, 추정 = 확인 못 함.
 
