@@ -13,6 +13,9 @@ on:
 
 env:
   ARMADA_SHA: b75a6d48e006782b886627dc2dee2b8691aa64f6
+  # not under the checkout: gcc predefines `linux`, and LVGL stringifies its config path, so
+  # .../tb710fu-arch-linux/... would turn into .../tb710fu-arch-1/...
+  A: /home/runner/work/_temp/armada
 
 jobs:
   build:
@@ -28,16 +31,16 @@ jobs:
 
       - name: Freedom sources (kShimC snapshot, packer, TB710FU pack script)
         run: |
-          git init -q armada
-          git -C armada remote add origin https://github.com/ArmadaOS-Freedom/armadaos-freedom.git
-          git -C armada sparse-checkout set devices/lenovo-tb323fu/boot/kshim-success-source \
+          git init -q "$A"
+          git -C "$A" remote add origin https://github.com/ArmadaOS-Freedom/armadaos-freedom.git
+          git -C "$A" sparse-checkout set devices/lenovo-tb323fu/boot/kshim-success-source \
             packages/kshim-tools devices/lenovo-tb710fu/boot
-          git -C armada fetch -q --depth 1 --filter=blob:none origin "$ARMADA_SHA"
-          git -C armada checkout -q FETCH_HEAD
+          git -C "$A" fetch -q --depth 1 --filter=blob:none origin "$ARMADA_SHA"
+          git -C "$A" checkout -q FETCH_HEAD
 
       - name: Pinned kShimC dependencies
         run: |
-          K="$PWD/armada/devices/lenovo-tb323fu/boot/kshim-success-source"
+          K="$A/devices/lenovo-tb323fu/boot/kshim-success-source"
           dep() { git init -q "$K/$1"; git -C "$K/$1" remote add origin "$2"
                   git -C "$K/$1" fetch -q --depth=1 origin "$3"; git -C "$K/$1" checkout -q --detach FETCH_HEAD; }
           dep lib/CrDK https://github.com/Project-Aloha/CrDK b6c3335136b7f6b28271917de11e8f11982975fc
@@ -53,7 +56,7 @@ jobs:
 
       - name: kShimC runtime (tb710fu_android_defconfig)
         run: |
-          K="$PWD/armada/devices/lenovo-tb323fu/boot/kshim-success-source"
+          K="$A/devices/lenovo-tb323fu/boot/kshim-success-source"
           export PATH="$K/build/venv/bin:$PATH"
           cd "$K"
           python3 tools/build_runtime.py --config configs/tb710fu_android_defconfig --out build/tb710fu --jobs 4 ||
@@ -62,15 +65,15 @@ jobs:
 
       - name: Packer (x86_64, for build/kshim.sh in WSL)
         run: |
-          cmake -S armada/packages/kshim-tools/vendor/packer -B pk -DCMAKE_BUILD_TYPE=Release -DBUILD_SHIMS=OFF
+          cmake -S "$A"/packages/kshim-tools/vendor/packer -B pk -DCMAKE_BUILD_TYPE=Release -DBUILD_SHIMS=OFF
           cmake --build pk --parallel
 
       - name: Stage
         run: |
-          K=armada/devices/lenovo-tb323fu/boot/kshim-success-source
+          K=$A/devices/lenovo-tb323fu/boot/kshim-success-source
           mkdir out
           cp $K/build/tb710fu/kShimC.bin $K/build/tb710fu/validation.json pk/MultiBootKernelPatcher pk/UnpackTool \
-            armada/packages/kshim-tools/vendor/avbtool.py armada/devices/lenovo-tb710fu/boot/pack_boot.py out/
+            "$A"/packages/kshim-tools/vendor/avbtool.py "$A"/devices/lenovo-tb710fu/boot/pack_boot.py out/
           (cd out && sha256sum * | tee SHA256SUMS)
 
       - uses: actions/upload-artifact@v4
