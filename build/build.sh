@@ -417,7 +417,7 @@ initrd_overlays() {
 	# USB-C host mode comes from pmic_glink, i.e. from the ADSP: without its remoteproc driver
 	# and firmware in the initramfs dwc3 stays a peripheral and the root USB disk never shows up
 	# modules from the staged kernel, so the initramfs matches it even if the rootfs is older
-	local m="$(kmod)" f pas fw="usr/lib/firmware/qcom/sm8650/xiaoxin/gt" src="$REPO/linux-firmware-tb710fu/qcom/sm8650/xiaoxin/gt"
+	local m="$(kmod)" f pas
 	OV=()
 	[ -f "$m/modules.dep" ] || die "no staged kernel modules in $m: run build.sh kernel"
 	# .ko, .ko.gz, .ko.zst: whatever this kernel's modules_install produced
@@ -430,8 +430,8 @@ initrd_overlays() {
 		[ -r "$m/$f" ] || die "missing $m/$f"
 		OV+=(--overlay "usr/lib/modules/$(kver)/$f=$m/$f")
 	done
-	# the same files build.sh rootfs installs; no rootfs needed (CI builds it)
-	for f in adsp.mbn adsp_dtb.mbn; do OV+=(--overlay "$fw/$f=$src/$f"); done
+	# no ADSP firmware here: mkinitcpio-tb710fu.conf FILES already puts adsp.mbn/adsp_dtb.mbn in the
+	# initramfs, and a second 35 MB copy pushed the kShimC boot_a past its 96 MiB partition
 	OV+=(--overlay hooks/tb710fu-fallback="$HERE/initcpio/hooks/tb710fu-fallback")
 }
 
