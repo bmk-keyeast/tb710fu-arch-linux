@@ -56,7 +56,8 @@ jobs:
           K="$PWD/armada/devices/lenovo-tb323fu/boot/kshim-success-source"
           export PATH="$K/build/venv/bin:$PATH"
           cd "$K"
-          python3 tools/build_runtime.py --config configs/tb710fu_android_defconfig --out build/tb710fu --jobs 4
+          python3 tools/build_runtime.py --config configs/tb710fu_android_defconfig --out build/tb710fu --jobs 4 ||
+            { grep -E -B2 -A6 "error|Error|FAILED" build/tb710fu/build.log | head -80; exit 1; }
           test "$(stat -c %s build/tb710fu/kShimC.bin)" = 4194304
 
       - name: Packer (x86_64, for build/kshim.sh in WSL)
