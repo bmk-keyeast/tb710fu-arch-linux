@@ -68,6 +68,18 @@ EDL로 `out/fbe-off`의 vendor_a(super LUN0 섹터 2851976)와 vbmeta_a를 쓰�
 boot_a는 kShimC 이미지(`build.sh kshim`)였고 문제없이 같이 동작. 데이터 초기화로 KernelSU 매니저 앱은
 다시 설치해야 함(`su` 없음).
 
+### 루팅 (LTBox, KernelSU LKM)
+
+KernelSU LKM은 **init_boot_a**만 패치하므로 kShimC boot_a와 상관없습니다. LTBox는 기기에서 vbmeta_a를 읽어
+init_boot 항목만 바꿔 다시 서명하고 나머지 항목(우리 vendor hashtree)은 그대로 둡니다(`rebuild_root_vbmeta_owner`).
+주의:
+- LTBox는 이미 패치된 init_boot를 거부합니다("already KernelSU-patched"). 먼저 롬의 순정 `init_boot.img`를 쓰고
+  vbmeta_a의 init_boot 항목만 맞춥니다: `avbsign.py refresh out/fbe-off/vbmeta_a.img OUT testkey init_boot=<롬>/init_boot.img`
+  (`out/fbe-off/vbmeta_a-stock-initboot.img`, 2026-11-15 EDL로 기록·확인).
+- **LTBox의 Unroot는 쓰지 말 것:** 예전 루팅 때 백업한 vbmeta를 되돌려 vendor hashtree가 틀어집니다(부팅 불가).
+- LTBox에서 GKI 모드는 끕니다(GKI 모드는 boot_a 커널을 바꿔 kShimC를 덮어씀).
+- 데이터를 초기화하면 LTBox "Disable OTA"(adb로 OTA 앱 제거)도 다시 해야 합니다.
+
 ## 검증 (2026-11-15, 기기에 쓰기 전)
 
 ✔ = 롬·바이너리에서 확인, 추정 = 확인 못 함.
