@@ -6,6 +6,10 @@ name: kshim
 
 on:
   workflow_dispatch:
+    inputs:
+      style:
+        description: menu style (src/Kconfig CONFIG_KSHIM_MENU_STYLE_<style>), e.g. IOS_HIG, STAR_CHART
+        default: IOS_HIG
   push:
     branches: [main]
     paths:
@@ -16,6 +20,7 @@ env:
   # not under the checkout: gcc predefines `linux`, and LVGL stringifies its config path, so
   # .../tb710fu-arch-linux/... would turn into .../tb710fu-arch-1/...
   A: /home/runner/work/_temp/armada
+  STYLE: ${{ inputs.style || 'IOS_HIG' }}
 
 jobs:
   build:
@@ -59,6 +64,10 @@ jobs:
           K="$A/devices/lenovo-tb323fu/boot/kshim-success-source"
           export PATH="$K/build/venv/bin:$PATH"
           cd "$K"
+          # menu style is compile-time only; Freedom's TB710FU profile ships STAR_CHART
+          sed -i "s/^CONFIG_KSHIM_MENU_STYLE_STAR_CHART=y$/CONFIG_KSHIM_MENU_STYLE_${STYLE}=y/" configs/tb710fu_android_defconfig
+          grep -q "^CONFIG_KSHIM_MENU_STYLE_${STYLE}=y$" configs/tb710fu_android_defconfig
+          grep -rqE "^s*config KSHIM_MENU_STYLE_${STYLE}$" src
           python3 tools/build_runtime.py --config configs/tb710fu_android_defconfig --out build/tb710fu --jobs 4 ||
             { grep -E -B2 -A6 "error|Error|FAILED" build/tb710fu/build.log | head -80; exit 1; }
           test "$(stat -c %s build/tb710fu/kShimC.bin)" = 4194304
@@ -72,6 +81,7 @@ jobs:
         run: |
           K=$A/devices/lenovo-tb323fu/boot/kshim-success-source
           mkdir out
+          echo "$STYLE" > out/STYLE
           cp $K/build/tb710fu/kShimC.bin $K/build/tb710fu/validation.json pk/MultiBootKernelPatcher pk/UnpackTool \
             "$A"/packages/kshim-tools/vendor/avbtool.py "$A"/devices/lenovo-tb710fu/boot/pack_boot.py out/
           (cd out && sha256sum * | tee SHA256SUMS)
