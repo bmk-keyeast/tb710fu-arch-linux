@@ -10,7 +10,7 @@
 #   build.sh personalize  CI rootfs (rootfs.yml) + local-overlay + DSP libs -> out/tb710fu-ssd.img (sudo)
 #   build.sh initramfs    out/initramfs.img from the rootfs-latest release (for kshim, no 1.6 GB download)
 #   build.sh personal     out/tb710fu-personal.tar (local-overlay + DSP libs) for android/install-linux-data.sh
-#   build.sh v4 e1|e1big|e2|e2b|e3 [STOCK_DIR]   locked-bootloader GKI v4 slot-b payload -> out/v4/<mode>/
+#   build.sh v4 e1|e1big|e2|e2b|e3|bounce [STOCK_DIR]   locked-bootloader GKI v4 slot-b payload -> out/v4/<mode>/
 #   build.sh kshim [STOCK_DIR]   kShimC menu boot_a (stock Android + this Linux) -> out/kshim/boot_a.img
 #   build.sh sign STOCK_BOOT STOCK_VBMETA   testkey AVB footer -> out/boot-signed.img (+ out/vbmeta-signed.img if needed)
 #   build.sh all       deps kernel rootfs bootimg image
@@ -513,8 +513,15 @@ v4() {
 	#           the load address (ApplyOverlay copies only on success) -> UpdateDeviceTree fails ->
 	#           fastboot; an invalid dtbo makes ABL copy our DTB itself (appended-DT path)
 	#   v4 e1big  e1 + 64 MiB vendor ramdisk filler (does ABL load a big vendor ramdisk?)
-	local mode="${1:?v4 e1|e1big|e2|e2b|e3}" S="${2:-$T/dump}" py="python3 -I" key="$HERE/testkey_rsa4096.pem"
-	local d="$OUT/v4/$mode" ri psize=100663296
+	#   v4 bounce e3 whose initramfs only makes slot a active and reboots (rdinit=/tb710fu-bounce):
+	#           slot b's job once boot_a carries kShimC. No root, no udev coldplug, so the ADSP and
+	#           USB-C stay untouched (2026-11-15: a reset in USB host mode left the PMIC stuck)
+	local mode="${1:?v4 e1|e1big|e2|e2b|e3|bounce}" S="${2:-$T/dump}" py="python3 -I" key="$HERE/testkey_rsa4096.pem"
+	local d="$OUT/v4/$mode" ri psize=100663296 cmdline="$CMDLINE" base="$1" bounce=()
+	if [ "$mode" = bounce ]; then
+		base=e3 cmdline="panic=5 rdinit=/tb710fu-bounce"
+		bounce=(--overlay tb710fu-bounce="$HERE/initcpio/tb710fu-bounce")
+	fi
 	[ "$ROOT_DEV" = ssd ] || d="$d-$ROOT_DEV"
 	rm -rf "$d" && mkdir -p "$d"
 	ri=$($py -c 'import sys; sys.path.insert(0, sys.argv[1]); import avbinfo
@@ -538,14 +545,14 @@ print(avbinfo.parse(avbinfo.vbmeta_blob(open(sys.argv[2], "rb").read())[0])["rol
 		[ "$($py "$HERE/avbsign.py" verify "$d/vbmeta_b.img" "$key")" = OK ] || die "vbmeta_b verify failed"
 		truncate -s "$(stat -c %s "$S/vendor_boot_a.img")" "$d/vendor_boot_b.img"
 		;;
-	e2|e2b|e3)
+	e2|e2b|e3|bounce)
 		local dtb="$d/tb710fu.dtb"
 		# ABL's UpdateDeviceTree() aborts the boot (-> fastboot) when /soc/cache-controller is
 		# missing: it appends qcom,sct-config to the LLCC node, which mainline names
 		# system-cache-controller@25000000. An empty stub satisfies ABL; the kernel ignores it.
 		dtc -q -I dtb -O dts -o "$d/tb710fu.dts" "$(kdtb)"
 		printf '\n/ {\n\tsoc@0 {\n\t\tcache-controller {\n\t\t};\n\t};\n};\n' >> "$d/tb710fu.dts"
-		if [ "$mode" = e3 ]; then
+		if [ "$base" = e3 ]; then
 			# with dtbo invalid, ABL takes the appended-DT path (DeviceTreeAppended), which needs an
 			# absolute match: MTP(8), subtype 0, HLOS DDR bits (subtype & 0x700) == DdrType<<8.
 			# Board.c BoardDdrType() leaves DdrType 0 above 4 GiB (8 GiB here); 0x600 (4 GiB) kept
@@ -555,21 +562,21 @@ print(avbinfo.parse(avbinfo.vbmeta_blob(open(sys.argv[2], "rb").read())[0])["rol
 		dtc -q -I dts -O dtb -o "$dtb" "$d/tb710fu.dts"
 		rm -f "$d/tb710fu.dts"
 		$py "$HERE/dtcheck.py" "$dtb" || die "DTB lacks a node ABL requires"
-		if [ "$mode" = e2b ]; then
+		if [ "$base" = e2b ]; then
 			# stock base DTBs all use board-id <0 0> (default match); the MTP id lives in dtbo
 			$py "$HERE/dtbprop.py" "$dtb" "$d/board0.dtb" qcom,board-id 0 0
 			dtb="$d/board0.dtb"
 		fi
 		$py "$HERE/bootv4.py" boot "$S/boot_a.img" "$d/boot_b.img" \
-			--kernel "$(kimage)" --cmdline "$CMDLINE"
+			--kernel "$(kimage)" --cmdline "$cmdline"
 		initrd_overlays
 		$py "$HERE/bootv4.py" vendor_boot "$S/vendor_boot_a.img" "$d/vendor_boot_b.img" \
-			--ramdisk "$OUT/initramfs.img" --dtb "$dtb" "${OV[@]}"
+			--ramdisk "$OUT/initramfs.img" --dtb "$dtb" "${OV[@]}" "${bounce[@]}"
 		# the overlays keep the payload current without regenerating the initramfs (sudo)
 		# empty generic ramdisk: Android's first-stage init must not be appended over ours
 		$py "$HERE/bootv4.py" init_boot "$S/init_boot_a.img" "$d/init_boot_b.img" --ramdisk empty
 		local extra=""
-		if [ "$mode" = e3 ]; then
+		if [ "$base" = e3 ]; then
 			# hash covers 4 KiB of zeros; the rest of the partition is zeroed too
 			head -c 4096 /dev/zero > "$d/dtbo_b.img"
 			extra="dtbo=$d/dtbo_b.img"
@@ -578,10 +585,10 @@ print(avbinfo.parse(avbinfo.vbmeta_blob(open(sys.argv[2], "rb").read())[0])["rol
 			vendor_boot="$d/vendor_boot_b.img" init_boot="$d/init_boot_b.img" $extra
 		[ "$($py "$HERE/avbsign.py" verify "$d/vbmeta_b.img" "$key")" = OK ] || die "vbmeta_b verify failed"
 		local p
-		if [ "$mode" = e3 ]; then truncate -s 25165824 "$d/dtbo_b.img"; fi
+		if [ "$base" = e3 ]; then truncate -s 25165824 "$d/dtbo_b.img"; fi
 		for p in vendor_boot init_boot; do truncate -s "$(stat -c %s "$S/${p}_a.img")" "$d/${p}_b.img"; done
 		;;
-	*) die "v4 e1|e1big|e2|e2b|e3" ;;
+	*) die "v4 e1|e1big|e2|e2b|e3|bounce" ;;
 	esac
 	# stock os_version/security_patch properties: ABL refuses a boot vbmeta without them (header os_version is 0)
 	$py "$HERE/avbsign.py" footer "$d/boot_b.img" "$psize" "$ri" "$key" --props-from "$S/boot_a.img"

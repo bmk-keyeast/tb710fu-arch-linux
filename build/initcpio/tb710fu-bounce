@@ -1,0 +1,20 @@
+#!/usr/bin/ash
+# Slot b "bounce" (build.sh v4 bounce, rdinit=/tb710fu-bounce): boot_a holds the kShimC menu, so if
+# ABL ever lands on slot b, make slot a active again and reboot. Nothing else: no root, no udev
+# coldplug of other subsystems, so the ADSP stays down and USB-C keeps its state (a reset in USB
+# host mode once left the PMIC's USB input stuck and took EDL away, 2026-11-15).
+PATH=/usr/bin:/usr/sbin:/bin:/sbin
+mount -t proc proc /proc
+mount -t sysfs sys /sys
+mount -t devtmpfs dev /dev
+log() { echo "<5>tb710fu-bounce: $*" > /dev/kmsg; echo ":: tb710fu-bounce: $*"; }
+log "slot b -> slot a"
+# qbootctl finds the A/B partitions through /dev/disk/by-partlabel: udev for block devices only
+/usr/lib/systemd/systemd-udevd --daemon --resolve-names=never
+udevadm trigger --subsystem-match=block --action=add
+udevadm settle --timeout=15
+# reboot even if qbootctl fails: slot b is not re-armed, ABL keeps trying slot a by itself
+qbootctl -s a || log "qbootctl failed"
+sync
+sleep 2
+reboot -f
