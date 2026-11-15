@@ -183,6 +183,10 @@ EOF
 		sha256sum < "$HERE/rootfs-files/build-sensors.sh" | sudo install -Dm644 /dev/stdin "$stamp"
 	fi
 
+	# again: the package install leaves / at 0700 (seen in CI), and qbootctl.sh reads the sysroot
+	# as the build user
+	sudo chmod 755 "$R"
+
 	log "Keyboard Pack: UART -> uinput daemon"
 	python3 -I "$HERE/rootfs-files/tb710fu-keyboard" --selftest
 	sudo install -Dm755 "$HERE/rootfs-files/tb710fu-keyboard" "$R/usr/bin/tb710fu-keyboard"
@@ -352,6 +356,7 @@ EOF
 		log "local overlay: $T/local-overlay"
 		tar -C "$T/local-overlay" -c . | sudo tar -C "$R" -x --no-same-owner --no-overwrite-dir
 	fi
+	sudo chmod 755 "$R"
 	sudo cp "$R/boot/initramfs-tb710fu.img" "$OUT/initramfs.img"
 	sudo chown "$(id -u):$(id -g)" "$OUT/initramfs.img"
 	sudo umount "$R"
