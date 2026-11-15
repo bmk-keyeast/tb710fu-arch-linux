@@ -112,6 +112,9 @@ EOF
 		log "reusing pacman stage in $R (FRESH=1 to redo)"
 		sudo mount --bind "$R" "$R"
 	fi
+	# / must be 0755 (a 0700 root locks every non-root user and service out, and build.sh image
+	# runs its checks as the build user); the stage directory came out 0700 on 2026-11-15
+	sudo chmod 755 "$R"
 	# every run, so PACKAGES added later reach a reused stage too (a no-op when up to date)
 	log "pacman: update + Plasma (qemu, slow)"
 	# pacman's download sandbox doesn't work under qemu-user
