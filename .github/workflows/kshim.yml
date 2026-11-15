@@ -1,0 +1,79 @@
+# kShimC boot menu for boot_a (Android + Linux from one boot image, no slot switching).
+# Builds ArmadaOS Freedom's kShimC runtime with its tb710fu_android_defconfig and the
+# DualBootKernelPatcher packer, following devices/lenovo-tb323fu/boot/kshim-success-source/
+# DEPENDENCIES.md at the same Freedom commit as kernel.yml. build/kshim.sh packs boot_a from these.
+name: kshim
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/kshim.yml
+
+env:
+  ARMADA_SHA: b75a6d48e006782b886627dc2dee2b8691aa64f6
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends git ca-certificates cmake ninja-build \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+            python3 python3-venv gcc make
+
+      - name: Freedom sources (kShimC snapshot, packer, TB710FU pack script)
+        run: |
+          git init -q armada
+          git -C armada remote add origin https://github.com/ArmadaOS-Freedom/armadaos-freedom.git
+          git -C armada sparse-checkout set devices/lenovo-tb323fu/boot/kshim-success-source \
+            packages/kshim-tools devices/lenovo-tb710fu/boot
+          git -C armada fetch -q --depth 1 --filter=blob:none origin "$ARMADA_SHA"
+          git -C armada checkout -q FETCH_HEAD
+
+      - name: Pinned kShimC dependencies
+        run: |
+          K="$PWD/armada/devices/lenovo-tb323fu/boot/kshim-success-source"
+          dep() { git init -q "$K/$1"; git -C "$K/$1" remote add origin "$2"
+                  git -C "$K/$1" fetch -q --depth=1 origin "$3"; git -C "$K/$1" checkout -q --detach FETCH_HEAD; }
+          dep lib/CrDK https://github.com/Project-Aloha/CrDK b6c3335136b7f6b28271917de11e8f11982975fc
+          dep lib/picolibc https://github.com/picolibc/picolibc f7edb0869e64b9d687f46961adeef7154921fe92
+          dep third_party/lvgl https://github.com/lvgl/lvgl 7f07a129e8d77f4984fff8e623fd5be18ff42e74
+          dep build/dependency-sources/kShimC https://github.com/sunflower2333/kShimC 82ce6eaa10c36e64cfd3f16799172d854f9a955b
+          git -C "$K/build/dependency-sources/kShimC" archive HEAD lib/libfdt | tar -x -C "$K"
+          sed -i '/^#include <stdint.h>$/a #include <stdlib.h>' "$K/lib/libfdt/include/libfdt_env.h"
+          (cd "$K" && echo "132cb14b8f0b323e5701d4bfcb0ebba4b1f35726bfdfa6739f18ad638d20e582  lib/libfdt/include/libfdt_env.h" | sha256sum -c -)
+          sed -i 's/\r$//' "$K/ports/crdk/patches/"*.patch
+          python3 -m venv "$K/build/venv"
+          "$K/build/venv/bin/pip" install -q kconfiglib
+
+      - name: kShimC runtime (tb710fu_android_defconfig)
+        run: |
+          K="$PWD/armada/devices/lenovo-tb323fu/boot/kshim-success-source"
+          export PATH="$K/build/venv/bin:$PATH"
+          cd "$K"
+          python3 tools/build_runtime.py --config configs/tb710fu_android_defconfig --out build/tb710fu --jobs 4
+          test "$(stat -c %s build/tb710fu/kShimC.bin)" = 4194304
+
+      - name: Packer (x86_64, for build/kshim.sh in WSL)
+        run: |
+          cmake -S armada/packages/kshim-tools/vendor/packer -B pk -DCMAKE_BUILD_TYPE=Release -DBUILD_SHIMS=OFF
+          cmake --build pk --parallel
+
+      - name: Stage
+        run: |
+          K=armada/devices/lenovo-tb323fu/boot/kshim-success-source
+          mkdir out
+          cp $K/build/tb710fu/kShimC.bin $K/build/tb710fu/validation.json pk/MultiBootKernelPatcher pk/UnpackTool \
+            armada/packages/kshim-tools/vendor/avbtool.py armada/devices/lenovo-tb710fu/boot/pack_boot.py out/
+          (cd out && sha256sum * | tee SHA256SUMS)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kshim-tb710fu
+          path: out/
+          retention-days: 90
