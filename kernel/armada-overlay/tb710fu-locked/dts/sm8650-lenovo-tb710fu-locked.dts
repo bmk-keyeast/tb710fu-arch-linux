@@ -4,14 +4,25 @@
  * tb710fu-arch-linux) instead of kShimC: ArmadaOS' board file plus the Lenovo Keyboard Pack.
  *
  * Keyboard Pack (docs/keyboard.md in tb710fu-arch-linux): 2-wire UART on QUP1 SE7 at
- * 921600 8N1, plug detect on gpio81, host TX enable on gpio100. Its pogo VDD (PM8550 LDO8 at
- * 3.3 V) is deliberately not described yet: switching that rail at boot reset the tablet.
+ * 921600 8N1, plug detect on gpio81, host TX enable on gpio100.
+ *
+ * Pogo VDD = PM8550 LDO8 (L8B). Stock lenovo_keyboard.ko sets exactly 3.300 V and enables it
+ * only after plug-in. Here a virtual consumer lets userspace switch it; nothing touches the rail
+ * at boot (regulator-boot-on on L8B reset the tablet at 0.37 s, 2026-11-15). Use 3.296 V: on
+ * the 8 mV grid and not above stock's 3.300 V (rpmh caches the voltage until the first enable,
+ * so the earlier 3.304 V was only ever sent together with that enable).
  */
 #include "sm8650-lenovo-tb710fu.dts"
 
 / {
 	aliases {
 		serial2 = &uart7;
+	};
+
+	/* tb710fu-keyboard: max_microvolts then min_microvolts = 3296000 enables, min = 0 disables */
+	keyboard-vdd {
+		compatible = "regulator-virtual-consumer";
+		default-supply = <&vreg_l8b_1p8>;
 	};
 };
 

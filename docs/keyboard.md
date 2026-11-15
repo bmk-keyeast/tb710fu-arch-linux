@@ -59,3 +59,25 @@ Host → keyboard (`7E 7E FF` frames), each echoed back by the keyboard:
 | `6a 04 33 02 00 00` | touchpad autosleep off (stock sends it after plug-in) |
 
 Stock input devices: "Lenovo Keyboard Pack For Yoga Tab Keyboard/Touchpad", vendor 0x17ef product 0x6271.
+
+## Power (L8B) on Linux — read before switching it
+
+Stock (`lenovo_keyboard.ko`, disassembled): `keyboard_power_init` does `regulator_get("vdd_3p3")` and
+`regulator_set_voltage(3300000, 3300000)`; `keyboard_power_on` calls `regulator_enable` only after the
+plug GPIO says attached (and on screen on/off). No load or mode calls; the stock DT gives L8B
+1.8–3.3 V, init 1.8 V, high-power mode. On the stock DT only the keyboard and an OCP notifier use L8B.
+
+2026-11-15: `regulator-boot-on` on L8B (3.304 V) reset the tablet at 0.37 s of every boot, keyboard
+attached or not. Mainline rpmh caches the voltage while the rail state is unknown, so 3.304 V
+(above stock's 3.300 V) reached the AOP only with that enable: the earlier build that "survived
+3.304 V" never sent it. Open hypotheses: the AOP rejects > 3.300 V, or BOB1 dips when the rail turns
+on that early (BOB1 also feeds the eUSB2 repeater L5B and the panel L13B).
+
+Rules now:
+- Nothing enables L8B at boot. The DT only has a `regulator-virtual-consumer` (`keyboard-vdd`).
+- 3.296 V: on the 8 mV grid and not above 3.300 V.
+- First switch is manual: `sudo tb710fu-keyboard --vdd-test` (5 s on, then off; marks in the kernel
+  log, kept by ramoops on a reset). Only after it survives does the daemon power the keyboard.
+- Test from the kShimC menu (Android is the default entry, so a reset ends in Android, not a loop),
+  with the USB-C port empty (a reset in host mode once left the PMIC's USB input stuck).
+- Order: keyboard detached → `--vdd-test`; then attach it and restart `tb710fu-keyboard`.

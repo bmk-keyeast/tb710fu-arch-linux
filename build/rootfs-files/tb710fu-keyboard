@@ -3,9 +3,10 @@
 
 Protocol and pins: docs/keyboard.md. DT (build/patches/kernel-0001-keyboard-pack.patch) gives
 the QUP1 SE7 UART (ttyHS2: qcom_geni_serial names non-console ports ttyHS<alias>),
-the keyboard-vdd regulator-output and SW_DOCK on gpio81.
+the keyboard-vdd virtual consumer on L8B and SW_DOCK on gpio81.
     tb710fu-keyboard             run (systemd: tb710fu-keyboard.service)
     tb710fu-keyboard --selftest  codec/report checks against captured frames
+    tb710fu-keyboard --vdd-test  switch L8B on and off once (see vdd_test) before the daemon may
 """
 import fcntl
 import glob
@@ -17,7 +18,11 @@ import sys
 import termios
 
 UART = "a9c000.serial"  # QUP1 SE7; the tty name (ttyHS2) comes from the kernel, look it up
-VDD = "/sys/devices/platform/keyboard-vdd/state"
+VDD = "/sys/devices/platform/keyboard-vdd/"  # regulator-virtual-consumer on L8B
+VDD_UV = 3296000  # 8 mV grid, not above stock's 3.300 V
+# Switching L8B is unproven on Linux (regulator-boot-on on it reset the tablet, 2026-11-15), so the
+# daemon powers the keyboard only after `tb710fu-keyboard --vdd-test` survived once and wrote this.
+VDD_OK = "/var/lib/tb710fu/keyboard-vdd-ok"
 GPIOCHIP = "/sys/bus/platform/devices/f100000.pinctrl/gpiochip*"
 TX_EN = 100  # TLMM line: host->keyboard TX buffer enable
 KEY = bytes.fromhex(
@@ -47,6 +52,31 @@ TP_RES = 28  # ponytail: units/mm guessed for a ~115x72 mm pad; libinput uses it
 
 def log(*a):
     print(*a, file=sys.stderr, flush=True)
+
+
+def vdd(on):
+    # max first: the virtual consumer enables once both limits are non-zero; min = 0 disables
+    for f, v in (("max_microvolts", VDD_UV), ("min_microvolts", VDD_UV if on else 0)):
+        open(VDD + f, "w").write(str(v))
+
+
+def vdd_test():
+    """One manual L8B on/off, USB-C unplugged, from the kShimC menu (a reset lands in Android).
+    The kernel log goes to /dev/kmsg first, so ramoops keeps it if the tablet resets."""
+    def kmsg(m):
+        log(m)
+        open("/dev/kmsg", "w").write("tb710fu-keyboard: " + m + "\n")
+    os.sync()
+    kmsg("vdd-test: L8B on at %d uV" % VDD_UV)
+    vdd(True)
+    kmsg("vdd-test: L8B on, still alive")
+    import time
+    time.sleep(5)
+    vdd(False)
+    kmsg("vdd-test: L8B off")
+    os.makedirs(os.path.dirname(VDD_OK), exist_ok=True)
+    open(VDD_OK, "w").write("%d\n" % VDD_UV)
+    log("ok: the daemon may now power the keyboard (restart tb710fu-keyboard)")
 
 
 def esc(b):
@@ -219,7 +249,10 @@ def run():
 
     def docked(on):
         nonlocal rep, kbd
-        open(VDD, "w").write("enabled" if on else "disabled")
+        if os.path.exists(VDD_OK):
+            vdd(on)
+        elif on:
+            log("keyboard VDD not switched: run tb710fu-keyboard --vdd-test once first")
         log("keyboard", "attached" if on else "detached")
         if on and rep is None:
             kbd, tp, sw = devices()
@@ -300,4 +333,4 @@ def selftest():
 
 
 if __name__ == "__main__":
-    selftest() if sys.argv[1:] == ["--selftest"] else run()
+    {"--selftest": selftest, "--vdd-test": vdd_test}.get(sys.argv[1] if sys.argv[1:] else "", run)()
