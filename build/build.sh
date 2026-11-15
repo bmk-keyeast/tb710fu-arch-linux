@@ -201,10 +201,12 @@ EOF
 	sudo tee "$R/etc/systemd/system/qbootctl-mark-successful.service" >/dev/null <<'EOF'
 [Unit]
 Description=Mark the current A/B slot as successfully booted
-After=local-fs.target
+# only once the desktop is up and has run a minute: a payload that resets later still falls back
+After=graphical.target
 
 [Service]
 Type=oneshot
+ExecStartPre=/usr/bin/sleep 60
 ExecStart=/usr/bin/qbootctl -m
 
 [Install]

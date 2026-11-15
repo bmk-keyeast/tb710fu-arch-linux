@@ -114,7 +114,35 @@ adb shell su -c "sh /data/local/tmp/flash-slot-b.sh /data/local/tmp/e3 --write" 
 |---|---|
 | SSD가 없거나 루트가 안 보임 | initramfs가 `tb710fu.wait`초(기본 30) 기다린 뒤 슬롯 a로 바꾸고 재부팅 |
 | 커널 패닉 | `panic=10`으로 재부팅 → ABL 재시도가 소진되면 슬롯 a |
-| 정상 부팅 | `qbootctl-mark-successful`이 슬롯 b를 성공으로 표시 |
+| initramfs 전에 리셋 (2026-11-15 루프) | 다시 무장된 슬롯이면 ABL 재시도 1회 소진 → 슬롯 a |
+| 정상 부팅 | 데스크톱이 뜨고 60초 뒤 `qbootctl-mark-successful`이 슬롯 b를 성공으로 표시 |
+
+### 2026-11-15 사고와 재발 방지
+
+✔ = 펌웨어·소스에서 확인, 추정 = 확인 못 함.
+
+경과: 리눅스에서 USB-C 호스트 모드(NVMe)로 쓰던 중 L8B `regulator-boot-on` 페이로드를 `dd`로 슬롯 b에 쓰고 재부팅
+→ 0.37초에 리셋 루프 → 슬롯 b가 "성공" 상태라 ABL이 슬롯 a로 넘어가지 않음 → USB가 모든 모드에서 죽어(충전 0 A,
+PC 인식 없음) fastboot·EDL 모두 불가.
+
+원인 사슬:
+1. **폴백 없음:** ABL은 성공 표시가 있는 슬롯의 재시도를 세지 않음 ✔(LinuxLoader: `Active Slot %s is bootable,
+   retry count`, `Slot %s is unbootable, trying alternate slot`). 리눅스가 정상 부팅마다 성공 표시를 했음.
+2. **USB가 안 살아남:** 충전·Type-C는 ADSP의 charger_pd가 관리함 ✔. 호스트 모드는 PMIC(PM8550B) OVP를 수동으로
+   바꾸고 OTG를 켬 ✔. 이를 되돌리는 건 charger_pd 초기화뿐 ✔. XBL은 USB suspend를 풀지 않고 ✔, UEFI는
+   배터리가 3.3V 미만일 때만 충전 펌웨어를 올림 ✔. ADSP 전에 죽는 커널이 루프를 돌면 PMIC 상태를 아무도 되돌리지
+   않음(추정). 1차 루프(ADSP가 올라온 루프)는 안드로이드로 돌아가 USB가 정상이었음.
+3. **탈출구 없음:** 딥 플래시 케이블 EDL도 XBL이 충전기로 SDP를 먼저 감지해야 함 ✔ → VBUS가 안 보이면 불가.
+
+방지책:
+- **슬롯 b 쓰기는 `tb710fu-update-slot-b`만** (위 절). `qbootctl -s b`는 A/B 플래그를 0xF(우선순위 3, 활성,
+  재시도 1, 성공 아님)로 씀 ✔(qbootctl 소스). 실패 부팅 한 번이면 ABL이 슬롯 a로 감 → 안드로이드 ADSP가 USB를
+  다시 초기화(1차 루프에서 실제로 그랬음).
+- **성공 표시를 늦춤:** `graphical.target` 뒤 60초. 부팅 직후 리셋되는 페이로드도 폴백됨.
+- **위험한 DT 변경(레귤레이터·전원)은** 위 두 가지가 갖춰진 상태에서만, USB-C 기기를 뺀 채로 시험.
+- **리눅스에서 충전이 되는지 한 번 확인** (아직 안 해 봄): 충전기를 꽂고 `/sys/class/power_supply/*/status`.
+- 안 한 것: 종료 시 Type-C를 sink로 돌리는 유닛(효과 미확인), 리눅스 `reboot edl`(DT에 EDL reboot-mode 없음 ✔,
+  양산 기기의 다운로드 모드는 막혀 있을 가능성, 추정).
 
 ## 하드웨어 메모
 

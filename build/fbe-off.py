@@ -191,10 +191,11 @@ def build(stock_vendor, stock_vbmeta, keypath, outdir):
     assert avbsign.verify(out_vb, key[0]), "vbmeta signature check failed"
     verify(out_vb, out_vendor)
 
-    with open(os.path.join(outdir, "SHA256SUMS"), "w") as fh:
+    # LF even on Windows: the device-side sha256sum -c / awk read "name\r" and fail
+    with open(os.path.join(outdir, "SHA256SUMS"), "w", newline="\n") as fh:
         for p in ("vendor_a.img", "vbmeta_a.img"):
             fh.write(f"{sha256(os.path.join(outdir, p))}  {p}\n")
-    with open(os.path.join(outdir, "stock.sha256"), "w") as fh:  # device-side: refuse anything else
+    with open(os.path.join(outdir, "stock.sha256"), "w", newline="\n") as fh:  # device-side: refuse anything else
         fh.write(f"{sha256(stock_vendor)}  vendor_a\n{sha256(stock_vbmeta)}  vbmeta_a\n")
     print(f"done: {outdir}")
 

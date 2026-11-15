@@ -8,8 +8,8 @@ tb_log() {
 # no usable root: make slot a (Android) active and reboot
 tb_fallback() {
 	tb_log "$* -> slot a"
-	# reboot even if qbootctl fails: slot b is never marked successful, so ABL's
-	# retry counter runs out and falls back to slot a by itself (no keyboard needed)
+	# reboot even if qbootctl fails: a freshly written slot b is re-armed (not successful,
+	# tb710fu-update-slot-b), so ABL's retry counter runs out and falls back to slot a by itself
 	qbootctl -s a || tb_log "qbootctl failed, rebooting for ABL retry fallback"
 	sleep 3
 	reboot -f

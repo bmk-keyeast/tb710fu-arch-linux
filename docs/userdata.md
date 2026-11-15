@@ -60,6 +60,24 @@ sudo tb710fu-install-userdata
 슬롯 b에 씁니다. 이제 SSD 없이 리눅스가 `/data/linux`에서 뜹니다. 루트가 안 보이면 initramfs가 슬롯 a로
 돌아갑니다.
 
+## 검증 (2026-11-15, 기기에서는 아직 안 돌림)
+
+✔ = 롬·바이너리에서 확인, 추정 = 확인 못 함.
+
+| 항목 | 결과 |
+|---|---|
+| 암호화된 `/data` 줄이 있는 곳 | super_1~8 중 vendor(super_7)에만, 딱 한 번 ✔. odm 등 다른 fstab은 없음 |
+| 2단계 마운트 | vendor rc의 `mount_all /vendor/etc/fstab.qcom --early/--late` ✔ |
+| vendor_boot 1단계 fstab | `/data`는 `latemount`라 1단계에서 안 씀 ✔. `/metadata`는 `formattable` ✔ → 0으로 지워도 다시 포맷됨 |
+| 암호화 없는 `/data` 경로 | 시스템 init.rc에 `on nonencrypted`가 남아 있음 ✔ (A16에서도 막는 코드는 못 찾음, 추정) |
+| vbmeta_a | 순정 덤프가 이미 testkey(sha1 2597c218…) ✔. 패치본도 같은 키·체인·롤백 인덱스·flags 0 ✔ |
+| vendor 해시트리 | `fbe-off.py verify` OK ✔, `out/fbe-off` SHA256SUMS OK ✔ |
+| 크기·위치 | super_7.img = vendor_a.img = 3682136 섹터 = lpdump의 vendor_a ✔ |
+| 발견한 버그 | Windows에서 만든 `SHA256SUMS`/`stock.sha256`이 CRLF여서 기기의 `sha256sum -c`가 거부했을 것 → LF로 고침 |
+
+남은 위험(추정): ABL이 testkey로 다시 서명한 vbmeta_a를 받는지는 슬롯 b에서만 확인됐습니다(같은 키). 안드로이드가
+부팅을 못 하면 `restore`나 EDL 롬 플래시로 되돌립니다.
+
 ## 되돌리기
 
 ```bash
