@@ -6,7 +6,7 @@ HERE=$(cd "$(dirname "$0")" && pwd -P)
 . "$HERE/config.env"
 R="$OUT/rootfs" SRC="$OUT/src/qbootctl"
 QBOOTCTL_REV="${QBOOTCTL_REV:-39a6e6d}"
-[ -f "$R/usr/lib/crt1.o" ] || { echo "no aarch64 glibc in $R, run build.sh rootfs first"; exit 1; }
+[ -f "$R/usr/lib/crt1.o" ] || { echo "no aarch64 glibc in $R, run build.sh rootfs first"; sudo ls -ld "$R" "$R/usr" "$R/usr/lib"; sudo find "$R/usr" -name "crt1.o" | head -3; exit 1; }
 [ -d "$SRC/.git" ] || git clone -q https://github.com/linux-msm/qbootctl.git "$SRC"
 git -C "$SRC" checkout -q "$QBOOTCTL_REV"
 # no gcc in the rootfs -> no crtbegin/libgcc.a; plain C needs only glibc's crt files
