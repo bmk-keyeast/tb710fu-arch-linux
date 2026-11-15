@@ -8,6 +8,7 @@
 #   build.sh bootimg   out/boot.img (header v2, DTB appended), unsigned
 #   build.sh image     out/tb710fu-ssd.img.xz for Rufus/balenaEtcher (sudo)
 #   build.sh v4 e1|e1big|e2|e2b|e3 [STOCK_DIR]   locked-bootloader GKI v4 slot-b payload -> out/v4/<mode>/
+#   build.sh kshim [STOCK_DIR]   kShimC menu boot_a (stock Android + this Linux) -> out/kshim/boot_a.img
 #   build.sh sign STOCK_BOOT STOCK_VBMETA   testkey AVB footer -> out/boot-signed.img (+ out/vbmeta-signed.img if needed)
 #   build.sh all       deps kernel rootfs bootimg image
 set -euo pipefail
@@ -216,6 +217,8 @@ EOF
 #!/bin/sh
 # switch to the other A/B slot (Android) and reboot
 set -e
+# booted from the kShimC menu (build.sh kshim): Android is the menu default, a reboot is enough
+grep -qw tb710fu.kshim=1 /proc/cmdline && exec systemctl reboot
 cur=$(qbootctl -c | grep -o '_[ab]' | tr -d _)
 [ "$cur" = a ] && other=b || other=a
 qbootctl -s "$other"
@@ -357,6 +360,62 @@ bootimg() {
 	log "out/boot.img ($(du -h "$OUT/boot.img" | cut -f1)), cmdline: $CMDLINE"
 }
 
+# OV: --overlay args that bring the initramfs up to date without regenerating it (sudo)
+initrd_overlays() {
+	# USB-C host mode comes from pmic_glink, i.e. from the ADSP: without its remoteproc driver
+	# and firmware in the initramfs dwc3 stays a peripheral and the root USB disk never shows up
+	# modules from the staged kernel, so the initramfs matches it even if the rootfs is older
+	local m="$(kmod)" f pas fw="usr/lib/firmware/qcom/sm8650/xiaoxin/gt"
+	OV=()
+	[ -f "$m/modules.dep" ] || die "no staged kernel modules in $m: run build.sh kernel"
+	# .ko, .ko.gz, .ko.zst: whatever this kernel's modules_install produced
+	pas=$(sed -n 's|^\(kernel/drivers/remoteproc/qcom_q6v5_pas\.ko[^:]*\):.*|\1|p' "$m/modules.dep")
+	[ -n "$pas" ] || die "qcom_q6v5_pas not in $m/modules.dep"
+	for f in $(sed -n "s|^${pas//./\\.}: ||p" "$m/modules.dep") \
+		"$pas" modules.dep modules.dep.bin modules.alias \
+		modules.alias.bin modules.softdep modules.symbols modules.symbols.bin modules.builtin \
+		modules.builtin.bin modules.builtin.alias.bin; do
+		[ -r "$m/$f" ] || die "missing $m/$f"
+		OV+=(--overlay "usr/lib/modules/$(kver)/$f=$m/$f")
+	done
+	for f in adsp.mbn adsp_dtb.mbn; do OV+=(--overlay "$fw/$f=$R/$fw/$f"); done
+	OV+=(--overlay hooks/tb710fu-fallback="$HERE/initcpio/hooks/tb710fu-fallback")
+}
+
+kshim() {
+	# kShimC boot menu in boot_a (ArmadaOS Freedom, .github/workflows/kshim.yml): the stock Android
+	# kernel and this Linux in one image, picked with the volume keys - no A/B slot switching.
+	# Android is the default entry, so a Linux that can't find its root (initramfs fallback reboots)
+	# or any other reset lands in Android. Linux gets its cmdline from the DTB's /chosen.
+	local S="${1:-$T/dump}" d="$OUT/kshim" py="python3 -I" key="$HERE/testkey_rsa4096.pem" gh run dl
+	[ -f "$(kimage)" ] || die "run: build.sh kernel"
+	[ -f "$OUT/initramfs.img" ] || die "run: build.sh rootfs"
+	rm -rf "$d" && mkdir -p "$d/tools"
+	gh=$(command -v gh || command -v gh.exe) || die "gh (GitHub CLI) not found"
+	run=${KSHIM_RUN:-$("$gh" run list -R "$GH_REPO" -w kshim.yml -b main -s success -L 1 --json databaseId -q '.[0].databaseId')}
+	[ -n "$run" ] || die "no successful kshim.yml run in $GH_REPO yet"
+	dl="$REPO/out/kshim-download" && rm -rf "$dl" && mkdir -p "$dl"
+	"$gh" run download "$run" -R "$GH_REPO" -n kshim-tb710fu -D "$(wslpath -w "$dl" 2>/dev/null || echo "$dl")"
+	cp "$dl"/* "$d/tools/" && rm -rf "$dl"
+	(cd "$d/tools" && sha256sum -c --quiet SHA256SUMS) || die "kshim artifact checksum mismatch"
+	chmod +x "$d/tools/MultiBootKernelPatcher" "$d/tools/UnpackTool"
+
+	cp "$(kdtb)" "$d/linux.dtb"
+	fdtget -p "$d/linux.dtb" /chosen >/dev/null 2>&1 || fdtput -c "$d/linux.dtb" /chosen
+	# tb710fu.kshim: reboot-to-android just reboots (menu default) instead of switching slots
+	fdtput -t s "$d/linux.dtb" /chosen bootargs "$CMDLINE tb710fu.kshim=1"
+	fdtput -t u "$d/linux.dtb" /chosen kshim,initrd-entry 3
+	initrd_overlays
+	$py "$HERE/bootv4.py" ramdisk "$OUT/initramfs.img" "$d/initrd.img" "${OV[@]}"
+	$py "$d/tools/pack_boot.py" --boot "$S/boot_a.img" --runtime "$d/tools/kShimC.bin" \
+		--linux "$(kimage)" --dtb "$d/linux.dtb" --initrd "$d/initrd.img" \
+		--packer "$d/tools/MultiBootKernelPatcher" --avbtool "$d/tools/avbtool.py" --key "$key" \
+		--android-name Android --linux-name "Arch Linux" --default android --out "$d/boot_a.img"
+	[ "$($py "$HERE/avbsign.py" verify "$d/boot_a.img" "$key")" = OK ] || die "boot_a verify failed"
+	(cd "$d" && sha256sum boot_a.img > SHA256SUMS)
+	log "out/kshim/boot_a.img ($(du -h "$d/boot_a.img" | cut -f1), kShimC run $run): write to boot_a"
+}
+
 v4() {
 	# Locked-bootloader layout: mirror stock GKI v4 (boot = kernel only, vendor_boot = DTB + ramdisk,
 	# init_boot = generic ramdisk) using the stock slot-a images as header templates.
@@ -417,24 +476,9 @@ print(avbinfo.parse(avbinfo.vbmeta_blob(open(sys.argv[2], "rb").read())[0])["rol
 		fi
 		$py "$HERE/bootv4.py" boot "$S/boot_a.img" "$d/boot_b.img" \
 			--kernel "$(kimage)" --cmdline "$CMDLINE"
-		# USB-C host mode comes from pmic_glink, i.e. from the ADSP: without its remoteproc driver
-		# and firmware in the initramfs dwc3 stays a peripheral and the root USB disk never shows up
-		local m="$R/usr/lib/modules/$(kver)" f pas fw="usr/lib/firmware/qcom/sm8650/xiaoxin/gt" ov=()
-		[ -d "$m" ] || die "rootfs has no modules for kernel $(kver): run build.sh rootfs"
-		# .ko, .ko.gz, .ko.zst: whatever this kernel's modules_install produced
-		pas=$(sed -n 's|^\(kernel/drivers/remoteproc/qcom_q6v5_pas\.ko[^:]*\):.*|\1|p' "$m/modules.dep")
-		[ -n "$pas" ] || die "qcom_q6v5_pas not in $m/modules.dep"
-		for f in $(sed -n "s|^${pas//./\\.}: ||p" "$m/modules.dep") \
-			"$pas" modules.dep modules.dep.bin modules.alias \
-			modules.alias.bin modules.softdep modules.symbols modules.symbols.bin modules.builtin \
-			modules.builtin.bin modules.builtin.alias.bin; do
-			[ -r "$m/$f" ] || die "missing $m/$f"
-			ov+=(--overlay "usr/lib/modules/$(kver)/$f=$m/$f")
-		done
-		for f in adsp.mbn adsp_dtb.mbn; do ov+=(--overlay "$fw/$f=$R/$fw/$f"); done
+		initrd_overlays
 		$py "$HERE/bootv4.py" vendor_boot "$S/vendor_boot_a.img" "$d/vendor_boot_b.img" \
-			--ramdisk "$OUT/initramfs.img" --dtb "$dtb" "${ov[@]}" \
-			--overlay hooks/tb710fu-fallback="$HERE/initcpio/hooks/tb710fu-fallback"
+			--ramdisk "$OUT/initramfs.img" --dtb "$dtb" "${OV[@]}"
 		# the overlays keep the payload current without regenerating the initramfs (sudo)
 		# empty generic ramdisk: Android's first-stage init must not be appended over ours
 		$py "$HERE/bootv4.py" init_boot "$S/init_boot_a.img" "$d/init_boot_b.img" --ramdisk empty
@@ -524,7 +568,8 @@ print(v["pubkey_sha1"], c[0] if c else "none", b["rollback_index"])' "$HERE" "$v
 case "${1:-}" in
 deps|kernel|rootfs|bootimg|image) "$1" ;;
 v4) shift; v4 "$@" ;;
+kshim) shift; kshim "$@" ;;
 sign) shift; sign "$@" ;;
 all) deps; kernel; rootfs; bootimg; image ;;
-*) sed -n '2,11p' "$0"; exit 1 ;;
+*) sed -n '2,12p' "$0"; exit 1 ;;
 esac

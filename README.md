@@ -108,6 +108,23 @@ adb shell su -c "sh /data/local/tmp/flash-slot-b.sh /data/local/tmp/e3 --write" 
 
 리눅스 안에서 새 페이로드를 쓸 때는 **반드시** `sudo tb710fu-update-slot-b DIR --write`를 씁니다. 슬롯 b만 쓰고 다시 읽어 확인한 뒤 `qbootctl -s b`로 슬롯을 다시 무장합니다(성공 표시 지움, 재시도 1회). 리눅스는 정상 부팅마다 슬롯 b를 "성공"으로 표시하는데, ABL은 성공 표시가 있는 슬롯의 재시도 횟수를 줄이지 않습니다. 그래서 `dd`로 직접 쓰고 재부팅하면 망가진 페이로드가 끝없이 재부팅을 반복합니다(2026-11-15에 실제로 겪어 EDL로 복구).
 
+### kShimC 메뉴 (boot_a, 슬롯 전환 없이 듀얼부팅)
+
+[ArmadaOS Freedom](https://github.com/ArmadaOS-Freedom/armadaos-freedom)의 kShimC 부팅 메뉴를 boot_a에 넣습니다.
+순정 안드로이드 커널과 리눅스 커널이 한 boot 이미지에 들어가고, 부팅할 때 볼륨 키로 고릅니다(8초 뒤 기본값
+안드로이드). Freedom이 TB710FU에서 검증한 구조이며, vbmeta_a가 boot를 testkey로 체인하므로(✔ 이 기기) 잠긴
+부트로더에서도 됩니다.
+
+- 런타임과 패커: [.github/workflows/kshim.yml](.github/workflows/kshim.yml)이 Freedom의 고정 커밋에서
+  `tb710fu_android_defconfig`로 빌드합니다.
+- 패킹: `build.sh kernel` 다음 `build.sh kshim [STOCK_DIR]` → `out/kshim/boot_a.img`. `STOCK_DIR/boot_a.img`는
+  **손대지 않은** boot_a 덤프여야 합니다. 리눅스 cmdline은 DTB `/chosen`에 들어가고(`tb710fu.kshim=1` 포함),
+  initramfs는 스테이징한 커널의 모듈로 덮어씁니다.
+- 리눅스의 "Android로 재부팅"은 kShimC로 부팅했을 때 슬롯을 바꾸지 않고 그냥 재부팅합니다(메뉴 기본값).
+- 크기: 압축 후 약 93 MB로 96 MiB 파티션에 겨우 들어갑니다. initramfs를 7.2.6용으로 다시 만들면 줄어듭니다.
+- 루트 파일시스템에 커널 7.2.6 모듈이 있어야 Wi-Fi, 터치, 소리, 배터리가 됩니다(`build.sh rootfs`).
+- 되돌리기: boot_a 백업을 다시 쓰면 됩니다(9008 또는 루트 안드로이드).
+
 ### 자동 폴백
 
 | 상황 | 동작 |

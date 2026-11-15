@@ -10,6 +10,7 @@ only the payloads are swapped.
   bootv4.py vendor_boot STOCK_VENDOR_BOOT OUT [--ramdisk F] [--dtb F] [--overlay DEST=SRC ...]
       --overlay appends a root-owned gzip cpio after the ramdisk; the kernel unpacks it last, so
       DEST (e.g. hooks/tb710fu-fallback) replaces the same path from the ramdisk
+  bootv4.py ramdisk     INITRAMFS OUT --overlay DEST=SRC ...   (just the ramdisk, for kShimC)
   bootv4.py selftest    DUMP_DIR      (rebuild stock a-slot images from their own parts, compare)
 Output is the bare image (no AVB footer, no padding); sign/footer with avbsign.py.
 """
@@ -154,7 +155,7 @@ def selftest(dump):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("kind", choices=["boot", "init_boot", "vendor_boot", "selftest"])
+    ap.add_argument("kind", choices=["boot", "init_boot", "vendor_boot", "ramdisk", "selftest"])
     ap.add_argument("stock")
     ap.add_argument("out", nargs="?")
     ap.add_argument("--kernel"); ap.add_argument("--cmdline"); ap.add_argument("--ramdisk"); ap.add_argument("--dtb")
@@ -163,6 +164,8 @@ def main():
     if a.kind == "selftest":
         sys.exit(0 if selftest(a.stock) else 1)
     rd = lambda p: open(p, "rb").read()
+    if a.kind == "ramdisk":  # kShimC initrd: STOCK is the initramfs, OUT gets it plus the overlays
+        a.ramdisk = a.stock
     stock = strip_footer(rd(a.stock))
     ramdisk = None if a.ramdisk is None else (EMPTY_CPIO if a.ramdisk == "empty" else rd(a.ramdisk))
     if a.kind in ("boot", "init_boot"):
@@ -181,7 +184,8 @@ def main():
             ramdisk = pad(ramdisk if ramdisk is not None else parse_vendor(stock)["vr"], 512) + gzip.compress(
                 newc([(d, 0o40755, b"") for d in dirs] + [(dest, 0o100755, rd(src)) for dest, src in files]),
                 9, mtime=0)
-        img = build_vendor(parse_vendor(stock), ramdisk=ramdisk, dtb=None if a.dtb is None else rd(a.dtb))
+        img = ramdisk if a.kind == "ramdisk" else \
+            build_vendor(parse_vendor(stock), ramdisk=ramdisk, dtb=None if a.dtb is None else rd(a.dtb))
     open(a.out, "wb").write(img)
     print(f"{a.out}: {len(img)} bytes")
 
