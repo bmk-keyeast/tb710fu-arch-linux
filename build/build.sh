@@ -399,6 +399,8 @@ personal() {
 	debugfs -R "rdump /adsp $s/$q" "$DSPSO" 2>/dev/null
 	[ -n "$(ls "$s/$q/adsp")" ] || die "no ADSP libs extracted from $DSPSO"
 	chmod -R a+rX "$s/usr"
+	# tar applies directory modes too: keep the rootfs's own for / and /root
+	chmod 755 "$s"; [ -d "$s/root" ] && chmod 700 "$s/root"
 	tar -C "$s" --owner=0 --group=0 --numeric-owner -cf "$OUT/tb710fu-personal.tar" .
 	rm -rf "$s"
 	log "out/tb710fu-personal.tar ($(du -h "$OUT/tb710fu-personal.tar" | cut -f1)): keep it private"

@@ -29,7 +29,27 @@
 돌고 있지 않으니 마운트된 vendor를 덮어쓸 위험이 없습니다. 순정이나 패치본이 아닌 상태면 쓰지 않고,
 `/data`와 `/metadata` 앞부분을 0으로 지워 안드로이드가 다음 부팅에 새로 포맷하게 합니다.
 
-## 순서
+## 순서 (kShimC, SSD 없이) — 지금 쓰는 방법
+
+암호화 해제는 위 "기기 결과"대로 끝났고, boot_a는 kShimC입니다. 리눅스는 kShimC 메뉴의 "Arch Linux"로
+부팅하고 루트는 `/data/linux`입니다.
+
+1. **PC:** `build.sh personal` → `out/tb710fu-personal.tar`(Wi-Fi·SSH 설정, 롬의 DSP 라이브러리, 16 MB, 비공개).
+2. **태블릿(안드로이드, KernelSU 루트):**
+   ```sh
+   adb push android/install-linux-data.sh out/tb710fu-personal.tar /data/local/tmp/
+   adb shell su -c "sh /data/local/tmp/install-linux-data.sh"
+   ```
+   태블릿이 rootfs-latest 릴리스에서 `tb710fu-rootfs.tar.xz`(약 1.3 GB)를 직접 내려받아 확인하고
+   `/data/linux`에 풉니다. 데이터가 걱정되면 Wi-Fi에서 하거나 PC에서 받아 `adb push`로 같은 자리에 둡니다.
+3. **PC:** `build.sh initramfs`(60 MB) → `ROOT_DEV=userdata build.sh kshim` → `out/kshim/boot_a.img`.
+4. **boot_a 쓰기:** `adb push`한 뒤 `su -c dd`로 쓰고 다시 읽어 해시를 확인합니다(또는 EDL, LUN4 섹터 112006).
+5. 재부팅 → 메뉴에서 Arch Linux. `/data/linux`가 없으면 initramfs가 30초 뒤 재부팅해서 안드로이드로 갑니다.
+   첫 부팅에 `tb710fu-firstboot`가 파일 capability를 다시 붙입니다(busybox tar는 xattr을 버림).
+
+아래는 SSD를 거치던 이전 순서입니다.
+
+## 순서 (이전: SSD → 슬롯 b)
 
 **0. 백업.** 안드로이드 `/data`는 지워집니다. KernelSU 모듈은 `out/backup-ksu-20261112/`에 있음.
 
