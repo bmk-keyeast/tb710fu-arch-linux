@@ -76,6 +76,8 @@ on that early (BOB1 also feeds the eUSB2 repeater L5B and the panel L13B).
 Measured on stock Android 2026-11-15 (`android/kb-power-probe.sh`, keyboard attached, gpio81 low):
 `pm_humu_l8` enabled, 3300000 uV, opmode fast (HPM), one user `soc:lenovo_kb-vdd_3p3`, 0 mA
 requested. L9B (same input pair) is camera-only (eeprom/sensor `cam_vaf`) and off.
+Detached (gpio81 high): `pm_humu_l8` disabled, 0 users, voltage still 3300000 uV. So stock powers the
+pogo pins only while a keyboard is attached; the daemon does the same.
 
 Rules now:
 - Nothing enables L8B at boot. The DT only has a `regulator-virtual-consumer` (`keyboard-vdd`).
