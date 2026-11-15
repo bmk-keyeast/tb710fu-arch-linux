@@ -134,6 +134,23 @@ PC 인식 없음) fastboot·EDL 모두 불가.
    않음(추정). 1차 루프(ADSP가 올라온 루프)는 안드로이드로 돌아가 USB가 정상이었음.
 3. **탈출구 없음:** 딥 플래시 케이블 EDL도 XBL이 충전기로 SDP를 먼저 감지해야 함 ✔ → VBUS가 안 보이면 불가.
 
+복구 (실제로 된 순서):
+1. **배터리 방전:** fastboot 화면(볼륨 업 + 전원)에 두어 배터리를 다 씀 → 꺼짐. 이 상태에서 전원 키 무반응,
+   충전기 5.2 V / 0 A.
+2. **충전기 + 전류계를 꽂은 채 전원 + 볼륨 다운을 약 10분** → 전류가 흐르기 시작하고 곧 충전 로고와 9 V PD 충전.
+   - 해석(추정): 배터리가 있을 때는 루프 중 3분 넘게 눌러도 소용없었음. 7초마다 다시 부팅하면서 PON 타이머가
+     처음부터 다시 시작돼 S3 리셋(16초, ✔ xbl_config `s3-reset`)이 끝까지 가지 못한 것으로 봄. 방전으로 루프가
+     멈춘 뒤에야 S3가 끝까지 돌아 PMIC를 초기화함. **방전 전략은 S3 타이머를 돌게 하는 데 유효했음.** 배터리
+     보호회로 차단(POR)이 같은 때 일어났을 가능성은 배제 못 함.
+   - 충전 로고 = UEFI가 저전압 + USB를 보고 ADSP 충전 펌웨어를 올린 것 ✔ → Type-C/USBIN이 다시 초기화됨.
+3. **EDL:** 루프가 다시 시작되면 딥 플래시 케이블로 9008 진입 → 정상 부팅됐던 `vendor_boot_b` + `vbmeta_b`를 씀
+   → 다시 읽어 확인 → 리셋. LTBox 도구(`QSaharaServer`, `fh_loader`)를 **PowerShell에서** 실행(Git Bash는
+   `\\.\COMn`을 망가뜨림). 프로그래머는 롬의 `xbl_s_devprg_ns.melf`.
+   - `QSaharaServer.exe -p \\.\COM48 -s 13:xbl_s_devprg_ns.melf`
+   - `fh_loader.exe --port=\\.\COM48 --memoryname=UFS --sendxml=write.xml --search_path=. --noprompt --zlpawarehost=1`
+   - LUN 4, 4 KiB 섹터: `vbmeta_b` 479082(16), `vendor_boot_b` 624118(24576), `vbmeta_a` 136634(16).
+4. **SSD 없이 리눅스 부팅** → 30초 뒤 initramfs가 `qbootctl -s a` → 안드로이드로 정상 복귀.
+
 방지책:
 - **슬롯 b 쓰기는 `tb710fu-update-slot-b`만** (위 절). `qbootctl -s b`는 A/B 플래그를 0xF(우선순위 3, 활성,
   재시도 1, 성공 아님)로 씀 ✔(qbootctl 소스). 실패 부팅 한 번이면 ABL이 슬롯 a로 감 → 안드로이드 ADSP가 USB를
