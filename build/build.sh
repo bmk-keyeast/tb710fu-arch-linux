@@ -7,6 +7,7 @@
 #   build.sh rootfs    ALARM + Plasma via qemu chroot, modules, firmware, UCM, initramfs (sudo)
 #   build.sh bootimg   out/boot.img (header v2, DTB appended), unsigned
 #   build.sh image     out/tb710fu-ssd.img.xz for Rufus/balenaEtcher (sudo)
+#   build.sh personalize  CI rootfs (rootfs.yml) + local-overlay + DSP libs -> out/tb710fu-ssd.img (sudo)
 #   build.sh v4 e1|e1big|e2|e2b|e3 [STOCK_DIR]   locked-bootloader GKI v4 slot-b payload -> out/v4/<mode>/
 #   build.sh kshim [STOCK_DIR]   kShimC menu boot_a (stock Android + this Linux) -> out/kshim/boot_a.img
 #   build.sh sign STOCK_BOOT STOCK_VBMETA   testkey AVB footer -> out/boot-signed.img (+ out/vbmeta-signed.img if needed)
@@ -89,7 +90,9 @@ kernel_spendy() {
 
 rootfs() {
 	[ -f "$(kimage)" ] || die "run: build.sh kernel"
-	ls /proc/sys/fs/binfmt_misc/qemu-aarch64 >/dev/null || die "qemu-aarch64 binfmt not registered"
+	# x86 (WSL) runs the aarch64 chroot through qemu; .github/workflows/rootfs.yml runs natively
+	[ "$(uname -m)" = aarch64 ] || ls /proc/sys/fs/binfmt_misc/qemu-aarch64 >/dev/null ||
+		die "qemu-aarch64 binfmt not registered"
 	local tgz="$OUT/$(basename "$ALARM_URL")"
 	if [ ! -s "$tgz" ]; then
 		curl -fL -o "$tgz.part" "$ALARM_URL" && mv "$tgz.part" "$tgz"
@@ -148,13 +151,16 @@ EOF
 	# (/usr/share/qcom/<qcom,soc>/<model's first word>/<board compatible>) in its own layout;
 	# configs/registry/socinfo from SpendyYT's dump, DSP libs from the stock dsp partition
 	local s="$fw/usr/share/qcom/sm8650/Lenovo/TB710FU" q="$R/usr/share/qcom/sm8650/Lenovo/tb710fu"
-	[ -r "$DSPSO" ] || die "DSPSO ($DSPSO) not readable: stock dspso.bin from the ROM"
 	sudo rm -rf "$R/usr/share/qcom" && sudo mkdir -p "$q/sensors" "$q/dsp"
 	sudo cp -r "$s/config" "$s/registry" "$q/sensors/"
 	sudo cp "$s/vendor/etc/sensors/sns_reg_config" "$q/sensors/sns_reg.conf"
 	sudo cp -r "$s/socinfo" "$q/"
-	sudo debugfs -R "rdump /adsp $q/dsp" "$DSPSO" 2>/dev/null
-	[ -n "$(ls "$q/dsp/adsp")" ] || die "no ADSP libs extracted from $DSPSO"
+	if [ -r "$DSPSO" ]; then
+		dsp_libs "$R"
+	else
+		# CI has no ROM: build.sh personalize adds them to the image
+		log "DSP libs skipped (no DSPSO $DSPSO): build.sh personalize adds them"
+	fi
 	sudo chmod -R a+rX "$R/usr/share/qcom"
 	if [ -f "$KDIR/rootfs-extra.tar.gz" ]; then
 		# ArmadaOS' TB710FU files that go with its kernel: aw882xx amp parameters, NT36532 touch
@@ -352,6 +358,44 @@ EOF
 	log "rootfs ready: $R ($(sudo du -sh "$R" | cut -f1))"
 }
 
+# stock ADSP libraries (sensors PD) from the ROM's dspso.bin into ROOT's hexagonrpcd tree
+dsp_libs() {
+	local q="$1/usr/share/qcom/sm8650/Lenovo/tb710fu/dsp"
+	[ -r "$DSPSO" ] || die "DSPSO ($DSPSO) not readable: stock dspso.bin from the ROM"
+	sudo mkdir -p "$q"
+	sudo debugfs -R "rdump /adsp $q" "$DSPSO" 2>/dev/null
+	[ -n "$(ls "$q/adsp")" ] || die "no ADSP libs extracted from $DSPSO"
+	sudo chmod -R a+rX "$q"
+}
+
+personalize() {
+	# CI image (.github/workflows/rootfs.yml) -> out/tb710fu-ssd.img with what must not be public:
+	# local-overlay (Wi-Fi keyfile, SSH key, sshd enable) and the ROM's DSP libraries. Writes the
+	# raw image (write-usb.ps1 takes it as is) and its sha256; out/initramfs.img comes along.
+	local run gh dl img="$OUT/tb710fu-ssd.img" mnt="$OUT/personalize.mnt"
+	gh=$(command -v gh || command -v gh.exe) || die "gh (GitHub CLI) not found"
+	run=${ROOTFS_RUN:-$("$gh" run list -R "$GH_REPO" -w rootfs.yml -b main -s success -L 1 --json databaseId -q '.[0].databaseId')}
+	[ -n "$run" ] || die "no successful rootfs.yml run in $GH_REPO yet"
+	dl="$REPO/out/rootfs-download" && rm -rf "$dl" && mkdir -p "$dl"
+	"$gh" run download "$run" -R "$GH_REPO" -n rootfs-tb710fu -D "$(wslpath -w "$dl" 2>/dev/null || echo "$dl")"
+	(cd "$dl" && sha256sum -c rootfs-tb710fu.sha256) || die "rootfs artifact checksum mismatch"
+	cp "$dl/initramfs.img" "$OUT/initramfs.img"
+	log "unpacking the SSD image"
+	rm -f "$img" && xz -dc "$dl/tb710fu-ssd.img.xz" > "$img" && rm -rf "$dl"
+	sudo umount "$mnt" 2>/dev/null || true
+	mkdir -p "$mnt"
+	sudo mount -o loop,offset=$((2048 * 512)) "$img" "$mnt"   # partition 1 at sector 2048 (image())
+	dsp_libs "$mnt"
+	if [ -d "$T/local-overlay" ]; then
+		log "local overlay: $T/local-overlay"
+		tar -C "$T/local-overlay" -c . | sudo tar -C "$mnt" -x --no-same-owner --no-overwrite-dir
+	fi
+	sudo umount "$mnt" && rmdir "$mnt"
+	sha256sum "$img" | cut -d' ' -f1 > "$img.sha256"
+	echo "$run" > "$OUT/ROOTFS_RUN"
+	log "out/tb710fu-ssd.img ($(du -h "$img" | cut -f1), rootfs run $run): write it with write-usb.ps1"
+}
+
 bootimg() {
 	local dtb
 	dtb=$(kdtb)
@@ -368,7 +412,7 @@ initrd_overlays() {
 	# USB-C host mode comes from pmic_glink, i.e. from the ADSP: without its remoteproc driver
 	# and firmware in the initramfs dwc3 stays a peripheral and the root USB disk never shows up
 	# modules from the staged kernel, so the initramfs matches it even if the rootfs is older
-	local m="$(kmod)" f pas fw="usr/lib/firmware/qcom/sm8650/xiaoxin/gt"
+	local m="$(kmod)" f pas fw="usr/lib/firmware/qcom/sm8650/xiaoxin/gt" src="$REPO/linux-firmware-tb710fu/qcom/sm8650/xiaoxin/gt"
 	OV=()
 	[ -f "$m/modules.dep" ] || die "no staged kernel modules in $m: run build.sh kernel"
 	# .ko, .ko.gz, .ko.zst: whatever this kernel's modules_install produced
@@ -381,7 +425,8 @@ initrd_overlays() {
 		[ -r "$m/$f" ] || die "missing $m/$f"
 		OV+=(--overlay "usr/lib/modules/$(kver)/$f=$m/$f")
 	done
-	for f in adsp.mbn adsp_dtb.mbn; do OV+=(--overlay "$fw/$f=$R/$fw/$f"); done
+	# the same files build.sh rootfs installs; no rootfs needed (CI builds it)
+	for f in adsp.mbn adsp_dtb.mbn; do OV+=(--overlay "$fw/$f=$src/$f"); done
 	OV+=(--overlay hooks/tb710fu-fallback="$HERE/initcpio/hooks/tb710fu-fallback")
 }
 
@@ -569,10 +614,10 @@ print(v["pubkey_sha1"], c[0] if c else "none", b["rollback_index"])' "$HERE" "$v
 }
 
 case "${1:-}" in
-deps|kernel|rootfs|bootimg|image) "$1" ;;
+deps|kernel|rootfs|bootimg|image|personalize) "$1" ;;
 v4) shift; v4 "$@" ;;
 kshim) shift; kshim "$@" ;;
 sign) shift; sign "$@" ;;
 all) deps; kernel; rootfs; bootimg; image ;;
-*) sed -n '2,12p' "$0"; exit 1 ;;
+*) sed -n '2,13p' "$0"; exit 1 ;;
 esac

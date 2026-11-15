@@ -1,0 +1,62 @@
+# Arch Linux ARM + Plasma rootfs, initramfs and SSD image on a native arm64 runner (no qemu:
+# minutes instead of an hour in WSL). The artifact is public, so it carries nothing private:
+# build.sh personalize adds local-overlay (Wi-Fi, SSH) and the ROM's DSP libraries on the PC.
+name: rootfs
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: [kernel]
+    types: [completed]
+    branches: [main]
+  push:
+    branches: [main]
+    paths:
+      - build/build.sh
+      - build/config.env
+      - build/rootfs-files/**
+      - build/initcpio/**
+      - .github/workflows/rootfs.yml
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Firmware submodule
+        run: git submodule update --init --depth 1 linux-firmware-tb710fu
+
+      - name: Build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y arch-install-scripts libarchive-tools gdisk e2fsprogs btrfs-progs \
+            clang lld python3 xz-utils curl device-tree-compiler
+          df -h / "$HOME"
+
+      - name: Kernel, rootfs, SSD image
+        run: |
+          bash build/build.sh kernel
+          bash build/build.sh rootfs
+          bash build/build.sh image
+          cd "$HOME/tb710fu/out"
+          sha256sum tb710fu-ssd.img.xz initramfs.img | tee rootfs-tb710fu.sha256
+          df -h /
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rootfs-tb710fu
+          path: |
+            ~/tb710fu/out/tb710fu-ssd.img.xz
+            ~/tb710fu/out/initramfs.img
+            ~/tb710fu/out/rootfs-tb710fu.sha256
+          compression-level: 0
+          retention-days: 14
