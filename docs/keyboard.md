@@ -73,6 +73,10 @@ attached or not. Mainline rpmh caches the voltage while the rail state is unknow
 3.304 V" never sent it. Open hypotheses: the AOP rejects > 3.300 V, or BOB1 dips when the rail turns
 on that early (BOB1 also feeds the eUSB2 repeater L5B and the panel L13B).
 
+Measured on stock Android 2026-11-15 (`android/kb-power-probe.sh`, keyboard attached, gpio81 low):
+`pm_humu_l8` enabled, 3300000 uV, opmode fast (HPM), one user `soc:lenovo_kb-vdd_3p3`, 0 mA
+requested. L9B (same input pair) is camera-only (eeprom/sensor `cam_vaf`) and off.
+
 Rules now:
 - Nothing enables L8B at boot. The DT only has a `regulator-virtual-consumer` (`keyboard-vdd`).
 - 3.296 V: on the 8 mV grid and not above 3.300 V.
