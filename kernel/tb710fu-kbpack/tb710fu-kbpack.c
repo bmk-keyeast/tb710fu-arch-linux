@@ -196,8 +196,7 @@ static void kbp_packet(struct kbpack *kb, const u8 *p, int n)
 	if (n < 2)
 		return;
 	if (log_packets && p[0] != 0x11 && p[0] != 0x12 && p[0] != 0x13)
-		dev_info(&kb->serdev->dev, "packet %*ph
-", n, p);
+		dev_info(&kb->serdev->dev, "packet %*ph\n", n, p);
 	switch (p[0]) {
 	case 0x11:
 		if (n >= 10)
