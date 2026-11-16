@@ -55,6 +55,16 @@
 
 		pinctrl-0 = <&qup_uart7_default>, <&kb_tx_en_default>;
 		pinctrl-names = "default";
+
+		/* Kernel driver (kernel/tb710fu-kbpack, module tb710fu-kbpack) in place of the
+		 * tb710fu-keyboard daemon: set "okay". The UART then has no tty (serdev). While
+		 * disabled, serdev finds no child and ttyHS2 stays for the daemon. */
+		keyboard {
+			compatible = "lenovo,tb710fu-keyboard-pack";
+			vdd-supply = <&vreg_l8b_1p8>;
+			tx-enable-gpios = <&tlmm 100 GPIO_ACTIVE_HIGH>;
+			status = "disabled";
+		};
 	};
 };
 

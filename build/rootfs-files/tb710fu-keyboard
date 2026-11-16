@@ -235,6 +235,9 @@ def devices():
 
 
 def run():
+    if os.path.isdir("/sys/bus/serial/drivers/tb710fu-kbpack"):  # DT node "okay": the kernel does it
+        log("kernel driver tb710fu-kbpack is loaded, nothing to do")
+        return
     import evdev
     dock = next(d for d in map(evdev.InputDevice, evdev.list_devices())
                 if SW_DOCK in d.capabilities().get(EV_SW, []))

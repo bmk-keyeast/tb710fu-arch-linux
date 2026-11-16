@@ -26,7 +26,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev dwarves \
-            zstd xz-utils cpio patch curl python3 kmod ccache git
+            zstd xz-utils cpio patch curl python3 kmod ccache git device-tree-compiler
 
       - name: ArmadaOS kernel tree + our overlay
         run: |
@@ -48,6 +48,22 @@ jobs:
         run: |
           export CCACHE_DIR="$HOME/.ccache"
           WORK_DIR="$RUNNER_TEMP/kb" OUT_DIR="$RUNNER_TEMP/kout" bash scripts/build-kernel.sh
+
+      # out-of-tree like Armada's own aw882xx; loads only when the DT keyboard node is "okay"
+      - name: Keyboard Pack kernel driver (kernel/tb710fu-kbpack)
+        run: |
+          cc -O2 -Wall -Wextra -Werror -o "$RUNNER_TEMP/codec-test" kernel/tb710fu-kbpack/codec-test.c
+          "$RUNNER_TEMP/codec-test"
+          stage=$(ls -d "$RUNNER_TEMP"/kb/staging-*)
+          kver=${stage##*/staging-}
+          src=$(ls -d "$RUNNER_TEMP"/kb/linux-*/ | head -1)
+          make -C "$src" M="$PWD/kernel/tb710fu-kbpack" W=1 KCFLAGS=-Werror modules
+          make -C "$src" M="$PWD/kernel/tb710fu-kbpack" INSTALL_MOD_PATH="$stage" \
+            INSTALL_MOD_DIR=extra/tb710fu-kbpack INSTALL_MOD_STRIP=1 modules_install
+          depmod -b "$stage" "$kver"
+          modinfo -b "$stage" -k "$kver" tb710fu-kbpack | grep -E '^(filename|alias|vermagic)'
+          dtc -I dtb -O dts "$stage/lib/modules/$kver/dtb/qcom/sm8650-lenovo-tb710fu-locked.dtb" 2>/dev/null |
+            grep -A6 'lenovo,tb710fu-keyboard-pack'
 
       - name: Pack Image, DTBs, modules and Armada's TB710FU rootfs files
         run: |

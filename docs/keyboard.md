@@ -87,3 +87,15 @@ Rules now:
 - Test from the kShimC menu (Android is the default entry, so a reset ends in Android, not a loop),
   with the USB-C port empty (a reset in host mode once left the PMIC's USB input stuck).
 - Order: keyboard detached → `--vdd-test`; then attach it and restart `tb710fu-keyboard`.
+
+## Kernel driver (kernel/tb710fu-kbpack) — built, not yet run on the device
+
+Port of the daemon to a serdev driver, built out-of-tree by `kernel.yml` into
+`extra/tb710fu-kbpack` (codec checked first by `codec-test.c` with the daemon's frames).
+
+- Same behaviour as the daemon: VDD (L8B 3.296 V) only while attached, the three input devices
+  exist only while attached, Caps Lock LED, plug-in hello answer, `SW_TABLET_MODE` on fold.
+- Plug detect stays gpio-keys' `SW_DOCK`; the driver follows it with an input handler.
+- The DT node `uart7/keyboard` (`lenovo,tb710fu-keyboard-pack`) is `disabled`, so nothing changes
+  until it is set `okay` and a new boot image is built. Then the UART has no tty and the daemon
+  exits on its own (it checks for the bound driver).
