@@ -155,13 +155,10 @@ EOF
 	local s="$fw/usr/share/qcom/sm8650/Lenovo/TB710FU" q="$R/usr/share/qcom/sm8650/Lenovo/tb710fu"
 	sudo rm -rf "$R/usr/share/qcom" && sudo mkdir -p "$q/sensors" "$q/dsp"
 	sudo cp -r "$s/config" "$s/registry" "$q/sensors/"
-	# the dump's config points into its own layout (Lenovo/TB710FU/{registry,config}): rewrite to
-	# ours, or the sensor PD finds no registry and SSC lists no sensors ('registry' timed out)
-	sed -e "s|/Lenovo/TB710FU/socinfo/|/Lenovo/tb710fu/socinfo/|" \
-		-e "s|/Lenovo/TB710FU/registry|/Lenovo/tb710fu/sensors/registry|" \
-		-e "s|/Lenovo/TB710FU/config|/Lenovo/tb710fu/sensors/config|" \
-		"$s/vendor/etc/sensors/sns_reg_config" | sudo tee "$q/sensors/sns_reg.conf" >/dev/null
-	grep -q TB710FU "$q/sensors/sns_reg.conf" && die "sns_reg.conf still points at the dump's layout"
+	# the stock vendor /etc/sensors/sns_reg_config, unchanged: its paths are DSP-side
+	# (/mnt/vendor/persist/..., /sys/devices/soc0/...), which hexagonrpcd maps to this tree. The
+	# dump's copy had host paths, which hexagonrpcd does not serve.
+	sudo install -Dm644 "$HERE/rootfs-files/sns_reg.conf" "$q/sensors/sns_reg.conf"
 	sudo cp -r "$s/socinfo" "$q/"
 	if [ -r "$DSPSO" ]; then
 		dsp_libs "$R"
