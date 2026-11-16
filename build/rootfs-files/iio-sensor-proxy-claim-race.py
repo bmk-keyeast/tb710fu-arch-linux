@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""iio-sensor-proxy ca0d5b08: start sensors claimed before their driver opened.
+"""iio-sensor-proxy ca0d5b08: start sensors claimed before their driver opened; guard NULL GErrors.
 
 SSC sensors open asynchronously (libssc discovery over QRTR). KWin claims the accelerometer
 as soon as the proxy is on the bus, which can be before DEVICE_FOR_TYPE() is set: the claim
@@ -25,4 +25,11 @@ new = """\t\tDEVICE_FOR_TYPE(i) = sensor_device;
 if new not in s:
     assert s.count(old) == 1, "anchor not found once"
     p.write_text(s.replace(old, new))
-print("iio-sensor-proxy: early claims start the sensor")
+# SSC drivers: libssc can fail without setting the GError, and error->message then crashes the
+# proxy (SIGSEGV, several per boot on 2026-11-16; found by the on-tablet opencode session)
+for f in sorted((pathlib.Path(sys.argv[1]) / "src").glob("drv-ssc-*.c")):
+    t = f.read_text()
+    u = t.replace('error->message);', 'error ? error->message : "UNKNOWN");')
+    if u != t:
+        f.write_text(u)
+print("iio-sensor-proxy: early claims start the sensor; NULL GError guarded")
