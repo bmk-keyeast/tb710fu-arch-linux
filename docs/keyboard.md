@@ -88,7 +88,7 @@ Rules now:
   with the USB-C port empty (a reset in host mode once left the PMIC's USB input stuck).
 - Order: keyboard detached → `--vdd-test`; then attach it and restart `tb710fu-keyboard`.
 
-## Kernel driver (kernel/tb710fu-kbpack) — built, not yet run on the device
+## Kernel driver (kernel/tb710fu-kbpack) — runs on the device (2026-11-16)
 
 Port of the daemon to a serdev driver, built out-of-tree by `kernel.yml` into
 `extra/tb710fu-kbpack` (codec checked first by `codec-test.c` with the daemon's frames).
@@ -99,3 +99,16 @@ Port of the daemon to a serdev driver, built out-of-tree by `kernel.yml` into
 - The DT node `uart7/keyboard` (`lenovo,tb710fu-keyboard-pack`) is `disabled`, so nothing changes
   until it is set `okay` and a new boot image is built. Then the UART has no tty and the daemon
   exits on its own (it checks for the bound driver).
+
+On the device (2026-11-16, boot_a 987009be…, `ROOT_DEV=userdata KBPACK=1 build.sh kshim` with the
+kernel from kernel.yml run 43799637253):
+- probe at 6.7 s, the three input devices appear, L8B goes on only with the keyboard attached
+  (gpio81 low); keys and touchpad work. No reset (the 2026-11-15 reset was `regulator-boot-on`
+  at 0.37 s and 3.304 V, not this).
+- Folded back: the keyboard firmware stops both keys and touchpad (checked by hand), and the
+  driver reports `SW_TABLET_MODE=1`.
+- Closing the keyboard over the screen also gives `SW_TABLET_MODE=1`, with chatter (dozens of
+  0/1 toggles within a second while the cover moves). Telling "closed" from "folded back" needs
+  another signal (ambient light is the candidate); lid-close suspend is not implemented.
+- The device-side daemon keeps running only for the input method switch when the driver is
+  bound (`/sys/bus/serial/drivers/tb710fu-kbpack` exists).

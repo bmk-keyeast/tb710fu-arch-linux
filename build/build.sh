@@ -523,6 +523,11 @@ kshim() {
 	# tb710fu.kshim: reboot-to-android just reboots (menu default) instead of switching slots
 	fdtput -t s "$d/linux.dtb" /chosen bootargs "$CMDLINE tb710fu.kshim=1"
 	fdtput -t u "$d/linux.dtb" /chosen kshim,initrd-entry 3
+	# KBPACK=1: the Keyboard Pack kernel driver (tb710fu-kbpack) instead of the daemon
+	if [ "${KBPACK:-0}" = 1 ]; then
+		fdtput -t s "$d/linux.dtb" /soc@0/geniqup@ac0000/serial@a9c000/keyboard status okay
+		log "DTB: Keyboard Pack kernel driver enabled"
+	fi
 	initrd_overlays
 	$py "$HERE/bootv4.py" ramdisk "$OUT/initramfs.img" "$d/initrd.img" "${OV[@]}"
 	$py "$d/tools/pack_boot.py" --boot "$S/boot_a.img" --runtime "$d/tools/kShimC.bin" \

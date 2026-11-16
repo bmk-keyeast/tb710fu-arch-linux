@@ -2,24 +2,25 @@
 
 **레노버 TB710FU(Xiaoxin Pad Pro GT, Snapdragon 8 Gen 3 / SM8650)를 부트로더 잠금을 유지한 채 Arch Linux ARM + KDE Plasma로 부팅**하는 빌드 도구 모음입니다.
 
-- 안드로이드는 슬롯 a에 그대로 두고, 리눅스는 **슬롯 b**에 AOSP testkey로 서명해서 넣습니다(LTBox 방식). fastboot와 언락이 필요 없습니다.
-- 루트 파일시스템은 USB-C로 연결한 SSD(NVMe)에 둡니다. 내장 저장소(`userdata` 축소)로 옮기는 것은 다음 단계입니다.
-- 커널은 SpendyYT의 메인라인 7.2 트리를 기반으로 합니다.
+- **부팅:** `boot_a` 하나에 **kShimC 부트 메뉴**(ArmadaOS Freedom)를 넣어, 볼륨 키로 안드로이드와 리눅스를 고릅니다. 기본값은 안드로이드(8초)라서, 리눅스가 실패하거나 리셋되면 안드로이드로 돌아옵니다. 서명은 AOSP testkey(LTBox 방식)이고, fastboot와 언락은 필요 없습니다.
+- **루트 파일시스템:** 안드로이드 `/data`(암호화 해제한 userdata) 안의 `/data/linux`에 있습니다(`ROOT_DEV=userdata`). → [docs/userdata.md](docs/userdata.md)
+- **커널:** ArmadaOS Freedom의 7.2.6 unified 커널에 이 저장소의 오버레이(`kernel/armada-overlay/tb710fu-locked`)를 얹어 CI(`kernel.yml`)에서 빌드합니다.
+- **슬롯 b:** 검증된 `v4-e3-20261115` 이미지를 그대로 둡니다. SSD가 없으면 30초 뒤 슬롯 a로 돌아갑니다.
+- **인계 문서:** [docs/handoff-2026-11-16.md](docs/handoff-2026-11-16.md)에 지금까지 알아낸 사실과 남은 일을 모두 정리했습니다.
 
-배경과 설계 메모: Obsidian `R&E/TB710FU 리눅스/`
-
-## 현재 상태 (2026-11-13)
+## 현재 상태 (2026-11-16, 기기 실측)
 
 | 항목 | 상태 | 비고 |
 |---|---|---|
-| 잠긴 부트로더에서 메인라인 부팅 | ✅ | 슬롯 b, `build.sh v4 e3` |
-| USB-C 호스트 + 외장 루트 | ✅ | initramfs에서 ADSP를 먼저 띄움 |
-| KDE Plasma (Wayland) | ✅ | freedreno FD750 GPU 가속 확인 |
-| Wi-Fi, SSH | ✅ | |
-| 키보드 팩 (포고 핀) | 🟡 빌드됨, 기기 미검증 | 프로토콜은 안드로이드 캡처로 검증 → [docs/keyboard.md](docs/keyboard.md) |
-| 화면 회전 센서 | ✅ 가속도·조도 동작 (2026-11-16) | ADSP 센서 허브(SSC). hexagonrpcd에 registry 쓰기 지원을 패치해야 센서 PD가 초기화됨([hexagonrpcd-registry-write.py](build/rootfs-files/hexagonrpcd-registry-write.py)). 장착 방향 보정 미확인 |
-| 리눅스를 안드로이드 `/data`에 두기 | 🟡 스크립트 준비, 미실행 | 순정 암호화 해제 + 공간 공유 → [docs/userdata.md](docs/userdata.md) |
-| 절전(deep suspend) | ❌ | 깨어나지 않음 → 절전 타깃을 막아 둠 |
+| kShimC 부트 메뉴(boot_a) | ✅ | iOS 테마. 기본값 안드로이드 |
+| 안드로이드 암호화 해제 + LTBox KernelSU 루트 | ✅ | `ro.crypto.state=unsupported`. LTBox Unroot와 GKI 모드는 쓰지 말 것 |
+| `/data/linux` 루트 | ✅ | 안드로이드 `/data`는 root만 접근(`/mnt/.android/data`) |
+| KDE Plasma (Wayland), Wi-Fi, SSH | ✅ | freedreno FD750 |
+| 키보드 팩 | ✅ 커널 드라이버로 동작 | `tb710fu-kbpack`(serdev), DT 노드를 켠 boot_a(`KBPACK=1`). 데몬 방식도 동작. 뒤로 접으면 펌웨어가 키·터치패드를 끔 → [docs/keyboard.md](docs/keyboard.md) |
+| 화면 회전·조도 센서 | ✅ | hexagonrpcd registry 쓰기 패치 + iio-sensor-proxy 경합 수정. 근접·나침반 없음 |
+| 충전 표시 | ✅ (새 커널) | ADSP가 배터리 전류 부호를 반대로 보냄 → battmgr 패치 |
+| 절전 (s2idle) | ✅ | 전원 버튼으로 재우기·깨우기. deep은 미시험 |
+| 키보드 덮을 때 절전 | ❌ | 덮을 때와 뒤로 접을 때가 같은 신호(`SW_TABLET_MODE`, 채터링 있음) |
 | 화면 끔 후 다시 켜기 | ⚠️ | DPMS on 때 리셋된 적 있음 → 자동 화면 끔 꺼 둠 |
 
 USB 메모리는 쓰기 지연(1회 약 175ms)이 커서 Plasma가 수 분씩 멈췄습니다. **NVMe SSD를 권장**합니다.

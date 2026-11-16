@@ -46,6 +46,16 @@ SUBSYSTEM=="misc", KERNEL=="fastrpc-*", GROUP="fastrpc", MODE="0660"
 SUBSYSTEM=="misc", KERNEL=="fastrpc-adsp", ENV{IIO_SENSOR_PROXY_TYPE}+="ssc-accel", ENV{ACCEL_MOUNT_MATRIX}="0,1,0;-1,0,0;0,0,1"
 EOF
 systemctl enable hexagonrpcd-adsp-sensorspd.service
+# the proxy crashed once in libssc report_received (SIGSEGV, 2026-11-16) and the unit has no
+# Restart=: auto-rotate then stays off until reboot
+install -Dm644 /dev/stdin /etc/systemd/system/iio-sensor-proxy.service.d/tb710fu-restart.conf <<'EOF'
+[Unit]
+StartLimitIntervalSec=0
+
+[Service]
+Restart=always
+RestartSec=5
+EOF
 # the sensor PD's persist/sensors/registry (registry/, sns_reg_version, parsed_file_list.csv)
 chown -R fastrpc:fastrpc /usr/share/qcom/sm8650/Lenovo/tb710fu/sensors/persist-registry
 # auto-rotate keeps the accelerometer streaming; across s2idle the ADSP would keep waking
