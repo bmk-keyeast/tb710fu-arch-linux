@@ -184,11 +184,12 @@ EOF
 	# rebuilt only when the script (pinned commits) changed
 	local stamp="$R/var/lib/tb710fu/build-sensors.sha256"
 	# (not `sudo cmp <(...)`: sudo closes the process-substitution fd, so that always differed)
-	local sensors_sum; sensors_sum=$(cat "$HERE/rootfs-files/build-sensors.sh" "$HERE/rootfs-files/hexagonrpcd-registry-write.py" | sha256sum)
+	local sensors_sum; sensors_sum=$(cat "$HERE/rootfs-files/build-sensors.sh" "$HERE/rootfs-files/hexagonrpcd-registry-write.py" "$HERE/rootfs-files/iio-sensor-proxy-claim-race.py" | sha256sum)
 	if [ "$(sudo cat "$stamp" 2>/dev/null)" != "$sensors_sum" ]; then
 		log "sensors: hexagonrpcd + libssc + iio-sensor-proxy (qemu build)"
 		sudo install -Dm755 "$HERE/rootfs-files/build-sensors.sh" "$R/usr/local/sbin/tb710fu-build-sensors"
 		sudo install -Dm755 "$HERE/rootfs-files/hexagonrpcd-registry-write.py" "$R/usr/local/sbin/tb710fu-hexagonrpcd-registry-write"
+		sudo install -Dm755 "$HERE/rootfs-files/iio-sensor-proxy-claim-race.py" "$R/usr/local/sbin/tb710fu-iio-sensor-proxy-claim-race"
 		sudo arch-chroot "$R" /usr/local/sbin/tb710fu-build-sensors
 		echo "$sensors_sum" | sudo install -Dm644 /dev/stdin "$stamp"
 	fi

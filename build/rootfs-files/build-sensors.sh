@@ -21,6 +21,8 @@ build() { # name url commit [meson args]
 	git -C "$src/$n" fetch -q --depth 1 "$url" "$rev" && git -C "$src/$n" checkout -q FETCH_HEAD
 	# the TB710FU sensor PD writes its registry (upstream hexagonrpcd is read-only)
 	[ "$n" != hexagonrpc ] || python3 /usr/local/sbin/tb710fu-hexagonrpcd-registry-write "$src/$n"
+	# KWin claims the accelerometer before the SSC driver has opened: start it once it has
+	[ "$n" != iio-sensor-proxy ] || python3 /usr/local/sbin/tb710fu-iio-sensor-proxy-claim-race "$src/$n"
 	meson setup "$src/$n/build" "$src/$n" --prefix=/usr --libexecdir=lib --buildtype=release "$@"
 	meson install -C "$src/$n/build"
 }
@@ -39,8 +41,9 @@ systemd-sysusers fastrpc.conf
 cat > /etc/udev/rules.d/60-tb710fu-sensors.rules <<'EOF'
 SUBSYSTEM=="misc", KERNEL=="fastrpc-*", GROUP="fastrpc", MODE="0660"
 # upstream only tags ADSP for light/compass; the accelerometer is on the ADSP here too.
-# ponytail: identity mount matrix until checked on the device (rotate it and compare in `monitor-sensor`)
-SUBSYSTEM=="misc", KERNEL=="fastrpc-adsp", ENV{IIO_SENSOR_PROXY_TYPE}+="ssc-accel", ENV{ACCEL_MOUNT_MATRIX}="1,0,0;0,1,0;0,0,1"
+# mount matrix from the device: upright landscape (keyboard side down) read left-up with the
+# identity; this makes it "normal" (2026-11-16)
+SUBSYSTEM=="misc", KERNEL=="fastrpc-adsp", ENV{IIO_SENSOR_PROXY_TYPE}+="ssc-accel", ENV{ACCEL_MOUNT_MATRIX}="0,1,0;-1,0,0;0,0,1"
 EOF
 systemctl enable hexagonrpcd-adsp-sensorspd.service
 # the sensor PD's persist/sensors/registry (registry/, sns_reg_version, parsed_file_list.csv)
@@ -51,7 +54,8 @@ install -Dm755 /dev/stdin /usr/lib/systemd/system-sleep/tb710fu-sensors <<'EOF'
 #!/bin/sh
 case "$1" in
 pre)	systemctl stop iio-sensor-proxy.service ;;
-post)	systemctl start --no-block iio-sensor-proxy.service ;;
+# hexagonrpcd-adsp-sensorspd has Conflicts=suspend.target: nothing starts it again otherwise
+post)	systemctl start --no-block hexagonrpcd-adsp-sensorspd.service iio-sensor-proxy.service ;;
 esac
 exit 0
 EOF
