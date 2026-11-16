@@ -154,7 +154,10 @@ EOF
 	# configs/registry/socinfo from SpendyYT's dump, DSP libs from the stock dsp partition
 	local s="$fw/usr/share/qcom/sm8650/Lenovo/TB710FU" q="$R/usr/share/qcom/sm8650/Lenovo/tb710fu"
 	sudo rm -rf "$R/usr/share/qcom" && sudo mkdir -p "$q/sensors" "$q/dsp"
-	sudo cp -r "$s/config" "$s/registry" "$q/sensors/"
+	sudo cp -r "$s/config" "$q/sensors/"
+	# hexagonrpcd (patched, build-sensors.sh) maps persist/sensors/registry here, writable: the
+	# sensor PD rewrites the registry from config at boot; the dump's copy is only a start
+	sudo mkdir -p "$q/sensors/persist-registry" && sudo cp -r "$s/registry" "$q/sensors/persist-registry/"
 	# the stock vendor /etc/sensors/sns_reg_config, unchanged: its paths are DSP-side
 	# (/mnt/vendor/persist/..., /sys/devices/soc0/...), which hexagonrpcd maps to this tree. The
 	# dump's copy had host paths, which hexagonrpcd does not serve.
@@ -181,11 +184,13 @@ EOF
 	# rebuilt only when the script (pinned commits) changed
 	local stamp="$R/var/lib/tb710fu/build-sensors.sha256"
 	# (not `sudo cmp <(...)`: sudo closes the process-substitution fd, so that always differed)
-	if [ "$(sudo cat "$stamp" 2>/dev/null)" != "$(sha256sum < "$HERE/rootfs-files/build-sensors.sh")" ]; then
+	local sensors_sum; sensors_sum=$(cat "$HERE/rootfs-files/build-sensors.sh" "$HERE/rootfs-files/hexagonrpcd-registry-write.py" | sha256sum)
+	if [ "$(sudo cat "$stamp" 2>/dev/null)" != "$sensors_sum" ]; then
 		log "sensors: hexagonrpcd + libssc + iio-sensor-proxy (qemu build)"
 		sudo install -Dm755 "$HERE/rootfs-files/build-sensors.sh" "$R/usr/local/sbin/tb710fu-build-sensors"
+		sudo install -Dm755 "$HERE/rootfs-files/hexagonrpcd-registry-write.py" "$R/usr/local/sbin/tb710fu-hexagonrpcd-registry-write"
 		sudo arch-chroot "$R" /usr/local/sbin/tb710fu-build-sensors
-		sha256sum < "$HERE/rootfs-files/build-sensors.sh" | sudo install -Dm644 /dev/stdin "$stamp"
+		echo "$sensors_sum" | sudo install -Dm644 /dev/stdin "$stamp"
 	fi
 
 	# again: the package install leaves / at 0700 (seen in CI), and qbootctl.sh reads the sysroot

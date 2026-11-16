@@ -17,7 +17,7 @@
 | KDE Plasma (Wayland) | ✅ | freedreno FD750 GPU 가속 확인 |
 | Wi-Fi, SSH | ✅ | |
 | 키보드 팩 (포고 핀) | 🟡 빌드됨, 기기 미검증 | 프로토콜은 안드로이드 캡처로 검증 → [docs/keyboard.md](docs/keyboard.md) |
-| 화면 회전 센서 | ❌ 기기에서 안 됨 | SSC는 뜨지만 센서 PD가 registry(`/mnt/vendor/persist/sensors/registry/registry/DIR`)에 쓰려 하고 hexagonrpcd는 쓰기를 거부함 → 센서 목록 없음 (2026-11-16) |
+| 화면 회전 센서 | ✅ 가속도·조도 동작 (2026-11-16) | ADSP 센서 허브(SSC). hexagonrpcd에 registry 쓰기 지원을 패치해야 센서 PD가 초기화됨([hexagonrpcd-registry-write.py](build/rootfs-files/hexagonrpcd-registry-write.py)). 장착 방향 보정 미확인 |
 | 리눅스를 안드로이드 `/data`에 두기 | 🟡 스크립트 준비, 미실행 | 순정 암호화 해제 + 공간 공유 → [docs/userdata.md](docs/userdata.md) |
 | 절전(deep suspend) | ❌ | 깨어나지 않음 → 절전 타깃을 막아 둠 |
 | 화면 끔 후 다시 켜기 | ⚠️ | DPMS on 때 리셋된 적 있음 → 자동 화면 끔 꺼 둠 |

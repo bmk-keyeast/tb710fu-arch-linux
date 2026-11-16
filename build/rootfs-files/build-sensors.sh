@@ -19,6 +19,8 @@ build() { # name url commit [meson args]
 	local n=$1 url=$2 rev=$3; shift 3
 	rm -rf "$src/$n" && git init -q "$src/$n"
 	git -C "$src/$n" fetch -q --depth 1 "$url" "$rev" && git -C "$src/$n" checkout -q FETCH_HEAD
+	# the TB710FU sensor PD writes its registry (upstream hexagonrpcd is read-only)
+	[ "$n" != hexagonrpc ] || python3 /usr/local/sbin/tb710fu-hexagonrpcd-registry-write "$src/$n"
 	meson setup "$src/$n/build" "$src/$n" --prefix=/usr --libexecdir=lib --buildtype=release "$@"
 	meson install -C "$src/$n/build"
 }
@@ -41,3 +43,15 @@ SUBSYSTEM=="misc", KERNEL=="fastrpc-*", GROUP="fastrpc", MODE="0660"
 SUBSYSTEM=="misc", KERNEL=="fastrpc-adsp", ENV{IIO_SENSOR_PROXY_TYPE}+="ssc-accel", ENV{ACCEL_MOUNT_MATRIX}="1,0,0;0,1,0;0,0,1"
 EOF
 systemctl enable hexagonrpcd-adsp-sensorspd.service
+# the sensor PD's persist/sensors/registry (registry/, sns_reg_version, parsed_file_list.csv)
+chown -R fastrpc:fastrpc /usr/share/qcom/sm8650/Lenovo/tb710fu/sensors/persist-registry
+# auto-rotate keeps the accelerometer streaming; across s2idle the ADSP would keep waking
+# (Armada's TB323FU measured ~36/s): stop the proxy before sleep, start it after
+install -Dm755 /dev/stdin /usr/lib/systemd/system-sleep/tb710fu-sensors <<'EOF'
+#!/bin/sh
+case "$1" in
+pre)	systemctl stop iio-sensor-proxy.service ;;
+post)	systemctl start --no-block iio-sensor-proxy.service ;;
+esac
+exit 0
+EOF
