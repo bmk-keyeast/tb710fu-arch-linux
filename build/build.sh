@@ -312,6 +312,8 @@ id $USERNAME >/dev/null 2>&1 || useradd -m -G wheel,audio,video,input -s /bin/ba
 echo "$USERNAME:$PASSWORD" | chpasswd
 passwd -l root
 echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/wheel
+# the kernel has no Landlock: pacman 7's download sandbox fails ("Landlock is not supported")
+sed -i 's/^#DisableSandboxFilesystem/DisableSandboxFilesystem/' /etc/pacman.conf
 # touch tablet: KWin's input method = Plasma Keyboard (on-screen keyboard). Apps must use Wayland
 # text-input for it, so no global QT_IM_MODULE/GTK_IM_MODULE=fcitx (earlier builds set them, which
 # kept the on-screen keyboard from ever showing). Korean: switch KWin's input method to Fcitx 5
