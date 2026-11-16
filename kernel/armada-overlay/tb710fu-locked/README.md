@@ -9,4 +9,8 @@ by `.github/workflows/kernel.yml`.
 - `config/tb710fu-locked.config`: USB storage/UAS, `BOOT_CONFIG` (v4 vendor_boot), f2fs features for
   `ROOT_DEV=userdata`, uinput, `LOCALVERSION=-tb710fu`.
 
+- `patches/0001-qcom-battmgr-tb710fu-current-sign.patch`: the ADSP reports the battery current
+  with the opposite sign; flipped for `lenovo,tb710fu` so upower shows charging.
+- `CONFIG_CPU_IDLE_GOV_TEO` (selected by `cpuidle.governor=teo` in build/config.env).
+
 ABL's own DTB requirements (board-id `<8 0>`, `/soc/cache-controller`) are added by `build.sh v4`.

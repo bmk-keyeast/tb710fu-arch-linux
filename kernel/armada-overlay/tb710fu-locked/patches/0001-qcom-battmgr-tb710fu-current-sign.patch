@@ -1,0 +1,22 @@
+From: tb710fu-arch-linux
+Subject: [PATCH] power: supply: qcom_battmgr: TB710FU battery current sign
+
+The TB710FU ADSP firmware reports the battery current positive while discharging
+(+1 A idle) and negative while charging (-9 A on 45 W PD). The power_supply ABI
+wants negative for discharging, so upower showed a charging tablet as discharging.
+Flip it for this board only.
+---
+diff --git a/drivers/power/supply/qcom_battmgr.c b/drivers/power/supply/qcom_battmgr.c
+--- a/drivers/power/supply/qcom_battmgr.c
++++ b/drivers/power/supply/qcom_battmgr.c
+@@ -1543,6 +1543,10 @@
+ 			break;
+ 		case BATT_CURR_NOW:
+ 			battmgr->status.current_now = le32_to_cpu(resp->intval.value);
++			/* TB710FU ADSP firmware: positive while discharging; the power_supply
++			 * ABI (and upower) want negative, or charging shows as discharging */
++			if (of_machine_is_compatible("lenovo,tb710fu"))
++				battmgr->status.current_now = -battmgr->status.current_now;
+ 			break;
+ 		case BATT_TEMP:
+ 			val = le32_to_cpu(resp->intval.value);
