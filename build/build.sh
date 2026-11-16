@@ -209,6 +209,27 @@ EOF
 
 	log "Android userdata tools + safe slot-b updates from Linux"
 	sudo install -Dm755 -t "$R/usr/local/sbin" "$HERE/rootfs-files/tb710fu-android-fbe" 		"$HERE/rootfs-files/tb710fu-install-userdata" "$HERE/rootfs-files/tb710fu-update-slot-b"
+	# file managers: no internal UFS partitions (sda..sdf, 70-odd of them)
+	echo 'SUBSYSTEM=="block", ENV{ID_PATH}=="platform-1d84000.ufshc-*", ENV{UDISKS_IGNORE}="1"' |
+		sudo tee "$R/etc/udev/rules.d/80-tb710fu-hide-ufs.rules" >/dev/null
+	# ROOT_DEV=userdata: the initramfs mounts Android's whole /data at /mnt/android. The first user
+	# is uid 1000 = Android's "system" and could write /data/system: only root keeps /data, at
+	# /mnt/.android/data (0700); /mnt/android is unmounted
+	sudo tee "$R/etc/systemd/system/tb710fu-android-storage.service" >/dev/null <<'EOF'
+[Unit]
+Description=Android /data for root only (/mnt/.android/data)
+ConditionPathIsMountPoint=/mnt/android
+Before=display-manager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# private first, or unmounting /mnt/android would also unmount the copy
+ExecStart=/bin/sh -ec 'install -d -m 700 /mnt/.android /mnt/.android/data; mount --make-private /mnt/android; mount --bind /mnt/android /mnt/.android/data; umount /mnt/android'
+
+[Install]
+WantedBy=multi-user.target
+EOF
 
 	log "A/B slot tools"
 	[ -x "$OUT/qbootctl" ] || bash "$HERE/qbootctl.sh"
@@ -324,7 +345,7 @@ printf '[Wayland]\nInputMethod=/usr/share/applications/org.kde.plasma.keyboard.d
 # on-screen keyboard languages (default: only the system locale, ko_KR -> no Latin letters); the
 # globe key switches between them
 printf '[General]\nenabledLocales=en_US,ko_KR\n' > /etc/xdg/plasmakeyboardrc
-systemctl enable sddm NetworkManager bluetooth qbootctl-mark-successful tb710fu-firstboot tb710fu-keyboard
+systemctl enable sddm NetworkManager bluetooth qbootctl-mark-successful tb710fu-firstboot tb710fu-keyboard tb710fu-android-storage
 # ALARM defaults: networkd fights NetworkManager; no sshd while the test password is set
 systemctl disable systemd-networkd sshd 2>/dev/null || true
 # touch-only tablet: skip the SDDM greeter

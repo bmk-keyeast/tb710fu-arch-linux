@@ -49,6 +49,10 @@
    실기에서 슬롯 a로 돌아오지 못하고 ABL 재시도 7회를 다 쓴 뒤에야 슬롯 a로 넘어갔습니다(원인 미확인).
 6. 재부팅 → 메뉴에서 Arch Linux. `/data/linux`가 없으면 initramfs가 30초 뒤 재부팅해서 안드로이드로 갑니다.
    첫 부팅에 `tb710fu-firstboot`가 파일 capability를 다시 붙입니다(busybox tar는 xattr을 버림).
+7. 리눅스에서 안드로이드 `/data`는 root만 봅니다(`/mnt/.android/data`, 0700; `tb710fu-android-storage`가
+   `/mnt/android`를 내림). 리눅스 첫 사용자 uid 1000이 안드로이드의 `system`과 같아서, 그냥 두면
+   `/data/system` 등을 고칠 수 있기 때문입니다. 파일 관리자에는 UFS 파티션이 안 보입니다(udev `UDISKS_IGNORE`).
+   리눅스는 userdata를 fsck하지 않습니다(안드로이드가 자기 fsck로 관리).
 
 아래는 SSD를 거치던 이전 순서입니다.
 
