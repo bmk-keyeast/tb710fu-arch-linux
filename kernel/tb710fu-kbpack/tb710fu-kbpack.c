@@ -79,6 +79,12 @@ static const struct { u16 usage, code; } kbp_consumer[] = {
 
 enum { KBP_SEND_HELLO, KBP_SEND_CAPS, KBP_CAPS_ON };
 
+/* echo 1 > /sys/module/tb710fu_kbpack/parameters/log_packets: log every non-input packet
+ * (fold/close state, the 16 04 status frames) to tell "closed over the screen" from "folded back" */
+static bool log_packets;
+module_param(log_packets, bool, 0644);
+MODULE_PARM_DESC(log_packets, "log non-key packets from the keyboard");
+
 struct kbpack {
 	struct serdev_device *serdev;
 	struct regulator *vdd;
@@ -189,6 +195,9 @@ static void kbp_packet(struct kbpack *kb, const u8 *p, int n)
 {
 	if (n < 2)
 		return;
+	if (log_packets && p[0] != 0x11 && p[0] != 0x12 && p[0] != 0x13)
+		dev_info(&kb->serdev->dev, "packet %*ph
+", n, p);
 	switch (p[0]) {
 	case 0x11:
 		if (n >= 10)

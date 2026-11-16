@@ -1,0 +1,19 @@
+#!/bin/sh
+# On battery: cap the performance cores (cpufreq policy3/5/7, up to 2.96/3.05 GHz) at ~2.2 GHz
+# to cut heat and drain; full speed on AC. The little cores (policy0, 2.27 GHz) are left alone.
+# Run by a udev rule on power_supply changes and once at boot (tb710fu-cpucap.service).
+ac=0
+for s in /sys/class/power_supply/*/online; do [ "$(cat "$s" 2>/dev/null)" = 1 ] && ac=1; done
+for p in /sys/devices/system/cpu/cpufreq/policy3 /sys/devices/system/cpu/cpufreq/policy5 \
+	 /sys/devices/system/cpu/cpufreq/policy7; do
+	[ -d "$p" ] || continue
+	if [ $ac = 1 ]; then
+		cat "$p/cpuinfo_max_freq" > "$p/scaling_max_freq"
+	else
+		best=$(cat "$p/cpuinfo_min_freq")
+		for f in $(cat "$p/scaling_available_frequencies"); do
+			[ "$f" -le 2200000 ] && [ "$f" -gt "$best" ] && best=$f
+		done
+		echo "$best" > "$p/scaling_max_freq"
+	fi
+done

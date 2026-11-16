@@ -217,6 +217,7 @@ WantedBy=multi-user.target
 EOF
 
 	log "Android userdata tools + safe slot-b updates from Linux"
+	sudo install -Dm755 "$HERE/rootfs-files/tb710fu-cpucap" "$R/usr/local/sbin/tb710fu-cpucap"
 	sudo install -Dm755 -t "$R/usr/local/sbin" "$HERE/rootfs-files/tb710fu-android-fbe" 		"$HERE/rootfs-files/tb710fu-install-userdata" "$HERE/rootfs-files/tb710fu-update-slot-b"
 	# file managers: no internal UFS partitions (sda..sdf, 70-odd of them)
 	echo 'SUBSYSTEM=="block", ENV{ID_PATH}=="platform-1d84000.ufshc-*", ENV{UDISKS_IGNORE}="1"' |
@@ -368,12 +369,23 @@ printf '[General]\nDisplayServer=wayland\nGreeterEnvironment=QT_WAYLAND_SHELL_IN
 # after boot, the user session never starts (no /run/user), KWin aborts -> black screen
 mkdir -p /etc/systemd/logind.conf.d
 printf '[Login]\nHandleLidSwitch=ignore\nHandleLidSwitchExternalPower=ignore\nHandleLidSwitchDocked=ignore\n' > /etc/systemd/logind.conf.d/10-tb710fu-lid.conf
-# deep suspend does not come back on this kernel yet (Wi-Fi, SSH and the display stay dead)
-systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
-# no idle display-off / lock: turning the DSI panel back on (DPMS) silently reset the tablet once
+# suspend: s2idle works (RTC and power-button wake, display off/on, 2026-11-16); deep is the
+# kernel default but never comes back (the tablet resets), so pin s2idle and drop hibernation
+systemctl mask hibernate.target hybrid-sleep.target suspend-then-hibernate.target
+mkdir -p /etc/systemd/sleep.conf.d
+printf '[Sleep]\nMemorySleepMode=s2idle\nAllowHibernation=no\nAllowSuspendThenHibernate=no\nAllowHybridSleep=no\n' > /etc/systemd/sleep.conf.d/tb710fu.conf
+# power button sleeps; on battery: dim 1 min, screen off 2 min, sleep 5 min (low: off 1, sleep 2);
+# on AC: screen off after 10 min, no sleep. No lock: the touch-only desktop may have no keyboard.
 mkdir -p /etc/xdg
 printf '[Daemon]\nAutolock=false\nLockOnResume=false\n' > /etc/xdg/kscreenlockerrc
-for g in AC Battery LowBattery; do printf '[%s][Display]\nDimDisplayWhenIdle=false\nTurnOffDisplayWhenIdle=false\n\n[%s][SuspendAndShutdown]\nAutoSuspendAction=0\n\n' \$g \$g; done > /etc/xdg/powerdevilrc
+printf '[AC][Display]\nTurnOffDisplayWhenIdle=true\nTurnOffDisplayIdleTimeoutSec=600\n\n[AC][SuspendAndShutdown]\nAutoSuspendAction=0\nPowerButtonAction=1\n\n[Battery][Display]\nDimDisplayWhenIdle=true\nDimDisplayIdleTimeoutSec=60\nTurnOffDisplayWhenIdle=true\nTurnOffDisplayIdleTimeoutSec=120\n\n[Battery][SuspendAndShutdown]\nAutoSuspendAction=1\nAutoSuspendIdleTimeoutSec=300\nPowerButtonAction=1\n\n[LowBattery][Display]\nTurnOffDisplayWhenIdle=true\nTurnOffDisplayIdleTimeoutSec=60\n\n[LowBattery][SuspendAndShutdown]\nAutoSuspendAction=1\nAutoSuspendIdleTimeoutSec=120\nPowerButtonAction=1\n' > /etc/xdg/powerdevilrc
+# fewer disk wakeups (writeback every 15 s); zram swap so big builds don't freeze the tablet
+printf 'vm.dirty_writeback_centisecs = 1500\nvm.dirty_expire_centisecs = 3000\n' > /etc/sysctl.d/90-tb710fu-power.conf
+printf '[zram0]\nzram-size = ram / 2\ncompression-algorithm = zstd\n' > /etc/systemd/zram-generator.conf
+# performance cores capped at ~2.2 GHz on battery (tb710fu-cpucap)
+echo 'SUBSYSTEM=="power_supply", ACTION=="change", RUN+="/usr/local/sbin/tb710fu-cpucap"' > /etc/udev/rules.d/90-tb710fu-cpucap.rules
+printf '[Unit]\nDescription=TB710FU: cap performance cores on battery\n\n[Service]\nType=oneshot\nExecStart=/usr/local/sbin/tb710fu-cpucap\n\n[Install]\nWantedBy=multi-user.target\n' > /etc/systemd/system/tb710fu-cpucap.service
+systemctl enable tb710fu-cpucap.service
 rm -rf /var/cache/pacman/pkg/*
 # file capabilities (ping, kwin_wayland, ...): Android's busybox tar drops xattrs when the rootfs
 # tarball is unpacked into /data/linux, so tb710fu-firstboot re-applies them from this list
