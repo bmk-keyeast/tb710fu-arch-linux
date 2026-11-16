@@ -11,6 +11,11 @@
  *   the tablet, 2026-11-15)
  * - the input devices exist only while attached, as with the daemon (KWin's tablet mode and
  *   on-screen keyboard look at what is plugged in)
+ * - SW_DOCK is debounced: folding the keyboard back can drop gpio81 for ~0.4 s. Acting on that
+ *   powered the keyboard off while it stayed on the pins, and the tablet stopped taking input
+ *   (2026-11-16)
+ * - the UART is open only while VDD is on: an attached but unpowered keyboard can hold RX low,
+ *   which the GENI UART would see as an endless break
  */
 #include <linux/delay.h>
 #include <linux/gpio/consumer.h>
@@ -32,6 +37,8 @@
 #define KBP_BAUD	921600
 #define KBP_VDD_UV	3296000		/* 8 mV grid, not above stock's 3.300 V */
 #define KBP_RX_MAX	512
+#define KBP_DOCK_MS	1000		/* SW_DOCK must hold this long before attach/detach */
+#define KBP_VDD_MS	50		/* VDD on -> open the UART */
 #define TP_X		3199
 #define TP_Y		1999
 #define TP_SLOTS	4
@@ -77,12 +84,14 @@ struct kbpack {
 	struct regulator *vdd;
 	struct gpio_desc *tx_en;
 	struct input_handler dock_handler;
-	struct work_struct work;
-	struct mutex lock;		/* attach/detach and sends (work) */
+	struct work_struct work;	/* sends */
+	struct delayed_work dock_work;	/* attach/detach, KBP_DOCK_MS after the last SW_DOCK change */
+	struct mutex lock;		/* attach/detach and sends */
 	unsigned long flags;
 	bool want_docked;		/* last SW_DOCK value */
-	bool docked;			/* VDD on, input devices registered */
+	bool docked;			/* VDD on, UART open, input devices registered */
 	bool vdd_on;
+	bool open;			/* UART open */
 
 	spinlock_t in_lock;		/* receive path vs. detach */
 	bool live;
@@ -346,6 +355,40 @@ free:
 	return err;
 }
 
+static int kbp_open(struct kbpack *kb)
+{
+	struct serdev_device *serdev = kb->serdev;
+	int err;
+
+	kb->rx_len = 0;
+	err = serdev_device_open(serdev);
+	if (err)
+		return err;
+	serdev_device_set_baudrate(serdev, KBP_BAUD);
+	serdev_device_set_flow_control(serdev, false);
+	err = serdev_device_set_parity(serdev, SERDEV_PARITY_NONE);
+	if (err) {
+		serdev_device_close(serdev);
+		return err;
+	}
+	kb->open = true;
+	return 0;
+}
+
+static void kbp_close(struct kbpack *kb)
+{
+	if (kb->open) {
+		serdev_device_close(kb->serdev);
+		kb->open = false;
+	}
+}
+
+static void kbp_vdd_off(struct kbpack *kb)
+{
+	if (kb->vdd_on && !regulator_disable(kb->vdd))
+		kb->vdd_on = false;
+}
+
 static void kbp_attach(struct kbpack *kb)
 {
 	struct device *dev = &kb->serdev->dev;
@@ -361,10 +404,21 @@ static void kbp_attach(struct kbpack *kb)
 			return;
 		}
 		kb->vdd_on = true;
+		msleep(KBP_VDD_MS);
+	}
+	if (!kb->open) {
+		err = kbp_open(kb);
+		if (err) {
+			dev_err(dev, "open UART: %d\n", err);
+			kbp_vdd_off(kb);
+			return;
+		}
 	}
 	err = kbp_inputs(kb);
 	if (err) {
 		dev_err(dev, "input devices: %d\n", err);
+		kbp_close(kb);
+		kbp_vdd_off(kb);
 		return;
 	}
 	memset(kb->prev, 0, sizeof(kb->prev));
@@ -383,6 +437,8 @@ static void kbp_detach(struct kbpack *kb)
 	spin_lock_irqsave(&kb->in_lock, irqf);
 	kb->live = false;
 	spin_unlock_irqrestore(&kb->in_lock, irqf);
+	/* close before VDD goes off: RX of an unpowered keyboard must not reach the UART */
+	kbp_close(kb);
 	if (kb->kbd) {
 		/* unregistering releases held keys and lifts fingers */
 		input_unregister_device(kb->kbd);
@@ -390,16 +446,14 @@ static void kbp_detach(struct kbpack *kb)
 		input_unregister_device(kb->sw);
 		kb->kbd = kb->tp = kb->sw = NULL;
 	}
-	if (kb->vdd_on && !regulator_disable(kb->vdd))
-		kb->vdd_on = false;
+	kbp_vdd_off(kb);
 	kb->docked = false;
 	dev_info(&kb->serdev->dev, "keyboard detached\n");
 }
 
-static void kbp_work(struct work_struct *work)
+static void kbp_dock_work(struct work_struct *work)
 {
-	static const u8 hello[] = { 0x6a, 0x04, 0x33, 0x02, 0x00, 0x00 };
-	struct kbpack *kb = container_of(work, struct kbpack, work);
+	struct kbpack *kb = container_of(to_delayed_work(work), struct kbpack, dock_work);
 
 	mutex_lock(&kb->lock);
 	if (READ_ONCE(kb->want_docked) != kb->docked) {
@@ -408,6 +462,15 @@ static void kbp_work(struct work_struct *work)
 		else
 			kbp_attach(kb);
 	}
+	mutex_unlock(&kb->lock);
+}
+
+static void kbp_work(struct work_struct *work)
+{
+	static const u8 hello[] = { 0x6a, 0x04, 0x33, 0x02, 0x00, 0x00 };
+	struct kbpack *kb = container_of(work, struct kbpack, work);
+
+	mutex_lock(&kb->lock);
 	if (kb->docked && test_and_clear_bit(KBP_SEND_HELLO, &kb->flags))
 		kbp_send(kb, hello, sizeof(hello));
 	if (kb->docked && test_and_clear_bit(KBP_SEND_CAPS, &kb->flags)) {
@@ -425,9 +488,10 @@ static void kbp_dock_event(struct input_handle *handle, unsigned int type, unsig
 {
 	struct kbpack *kb = container_of(handle->handler, struct kbpack, dock_handler);
 
+	/* every change restarts the wait, so a bounce shorter than KBP_DOCK_MS does nothing */
 	if (type == EV_SW && code == SW_DOCK) {
 		WRITE_ONCE(kb->want_docked, !!value);
-		schedule_work(&kb->work);
+		mod_delayed_work(system_wq, &kb->dock_work, msecs_to_jiffies(KBP_DOCK_MS));
 	}
 }
 
@@ -451,7 +515,7 @@ static int kbp_dock_connect(struct input_handler *handler, struct input_dev *dev
 	if (err)
 		goto unregister;
 	WRITE_ONCE(kb->want_docked, test_bit(SW_DOCK, dev->sw));
-	schedule_work(&kb->work);
+	mod_delayed_work(system_wq, &kb->dock_work, 0);	/* state at probe: no wait */
 	return 0;
 unregister:
 	input_unregister_handle(handle);
@@ -491,6 +555,7 @@ static int kbp_probe(struct serdev_device *serdev)
 	mutex_init(&kb->lock);
 	spin_lock_init(&kb->in_lock);
 	INIT_WORK(&kb->work, kbp_work);
+	INIT_DELAYED_WORK(&kb->dock_work, kbp_dock_work);
 	serdev_device_set_drvdata(serdev, kb);
 
 	kb->vdd = devm_regulator_get(dev, "vdd");
@@ -500,15 +565,8 @@ static int kbp_probe(struct serdev_device *serdev)
 	if (IS_ERR(kb->tx_en))
 		return dev_err_probe(dev, PTR_ERR(kb->tx_en), "tx-enable-gpios\n");
 
+	/* the UART is opened by kbp_attach, only while the keyboard has VDD */
 	serdev_device_set_client_ops(serdev, &kbp_serdev_ops);
-	err = devm_serdev_device_open(dev, serdev);
-	if (err)
-		return dev_err_probe(dev, err, "open UART\n");
-	serdev_device_set_baudrate(serdev, KBP_BAUD);
-	serdev_device_set_flow_control(serdev, false);
-	err = serdev_device_set_parity(serdev, SERDEV_PARITY_NONE);
-	if (err)
-		return dev_err_probe(dev, err, "parity\n");
 
 	kb->dock_handler.name = "tb710fu-kbpack";
 	kb->dock_handler.event = kbp_dock_event;
@@ -525,10 +583,13 @@ static void kbp_remove(struct serdev_device *serdev)
 {
 	struct kbpack *kb = serdev_device_get_drvdata(serdev);
 
-	input_unregister_handler(&kb->dock_handler);
+	input_unregister_handler(&kb->dock_handler);	/* no new dock work after this */
+	cancel_delayed_work_sync(&kb->dock_work);
 	mutex_lock(&kb->lock);
 	if (kb->docked)
 		kbp_detach(kb);	/* not live: the receive path schedules nothing after this */
+	kbp_close(kb);
+	kbp_vdd_off(kb);
 	mutex_unlock(&kb->lock);
 	cancel_work_sync(&kb->work);
 }
