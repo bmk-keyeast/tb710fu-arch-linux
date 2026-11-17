@@ -25,6 +25,7 @@ EV_SW, SW_TABLET_MODE = 5, 1
 HOLD = 1.5        # s the fold switch must stay set: rides out the chatter
 MIN_LUX = 20.0    # darker than this before closing: can't tell closed from folded
 RATIO = 0.5       # closed: light below this share of the level before
+STALE = 30        # s without a light reading: restart monitor-sensor
 
 lux = collections.deque(maxlen=600)  # (monotonic time, lux)
 
@@ -49,6 +50,17 @@ def light():
     while True:
         p = subprocess.Popen(["stdbuf", "-oL", "monitor-sensor"], stdout=subprocess.PIPE,
                              stderr=subprocess.DEVNULL, text=True)
+        started = time.monotonic()
+
+        def watchdog(p=p):
+            # the sleep hook restarts iio-sensor-proxy; monitor-sensor then waits for it forever
+            # without claiming the light again: no reading for STALE s -> start over
+            while p.poll() is None:
+                time.sleep(5)
+                last = lux[-1][0] if lux else started
+                if time.monotonic() - max(last, started) > STALE:
+                    p.terminate()
+        threading.Thread(target=watchdog, daemon=True).start()
         for line in p.stdout:
             if "Light changed:" in line:
                 try:
@@ -56,7 +68,7 @@ def light():
                 except ValueError:
                     pass
         p.wait()
-        time.sleep(5)  # proxy restarting
+        time.sleep(2)  # proxy restarting
 
 
 def run():
