@@ -8,20 +8,36 @@
 - **슬롯 b:** 검증된 `v4-e3-20261115` 이미지를 그대로 둡니다. SSD가 없으면 30초 뒤 슬롯 a로 돌아갑니다.
 - **인계 문서:** [docs/handoff-2026-11-16.md](docs/handoff-2026-11-16.md)에 지금까지 알아낸 사실과 남은 일을 모두 정리했습니다.
 
-## 현재 상태 (2026-11-16, 기기 실측)
+## 현재 상태 (2026-11-17, 기기 실측)
 
 | 항목 | 상태 | 비고 |
 |---|---|---|
-| kShimC 부트 메뉴(boot_a) | ✅ | iOS 테마. 기본값 안드로이드 |
+| kShimC 부트 메뉴(boot_a) | ✅ | iOS 테마, 기본값 안드로이드. 지금 기기의 boot_a는 `987009be…`(키보드 커널 드라이버판, `KBPACK=1`) |
 | 안드로이드 암호화 해제 + LTBox KernelSU 루트 | ✅ | `ro.crypto.state=unsupported`. LTBox Unroot와 GKI 모드는 쓰지 말 것 |
 | `/data/linux` 루트 | ✅ | 안드로이드 `/data`는 root만 접근(`/mnt/.android/data`) |
 | KDE Plasma (Wayland), Wi-Fi, SSH | ✅ | freedreno FD750 |
-| 키보드 팩 | ✅ 커널 드라이버로 동작 | `tb710fu-kbpack`(serdev), DT 노드를 켠 boot_a(`KBPACK=1`). 데몬 방식도 동작. 뒤로 접으면 펌웨어가 키·터치패드를 끔 → [docs/keyboard.md](docs/keyboard.md) |
-| 화면 회전·조도 센서 | ✅ | hexagonrpcd registry 쓰기 패치 + iio-sensor-proxy 경합 수정. 근접·나침반 없음 |
-| 충전 표시 | ✅ (새 커널) | ADSP가 배터리 전류 부호를 반대로 보냄 → battmgr 패치 |
-| 절전 (s2idle) | ✅ | 전원 버튼으로 재우기·깨우기. deep은 미시험 |
-| 키보드 덮을 때 절전 | ❌ | 덮을 때와 뒤로 접을 때가 같은 신호(`SW_TABLET_MODE`, 채터링 있음) |
-| 화면 끔 후 다시 켜기 | ⚠️ | DPMS on 때 리셋된 적 있음 → 자동 화면 끔 꺼 둠 |
+| 키보드 팩 | ✅ 커널 드라이버 | `tb710fu-kbpack`(serdev). 연결 감지 1초 디바운스, UART는 VDD가 켜진 동안만 열기, 놓친 "펴짐" 신호는 키·터치로 복구 → [docs/keyboard.md](docs/keyboard.md) |
+| 키보드 뒤로 접기 | ✅ | 펌웨어가 키·터치패드를 끄고 `SW_TABLET_MODE=1` |
+| 키보드 덮을 때 절전 | ✅ (재시험 필요) | 패킷으로는 접기와 구분 불가 → 조도 센서로 판별(`tb710fu-lid`). 절전 후 재구독·태블릿 모드 복구 수정은 재시험 전 |
+| 화면 회전·조도 센서 | ✅ | hexagonrpcd registry 쓰기 패치, iio-sensor-proxy 경합·NULL GError 수정, 보정 행렬 확정. 근접·나침반 없음 |
+| 충전 표시 | ✅ | ADSP가 배터리 전류 부호를 반대로 보냄 → battmgr 패치 |
+| 절전 | ✅ s2idle | 전원 버튼·덮기로 재우고 전원 버튼으로 깨움. **deep은 리셋됨(사용 금지)** |
+| 화면 자동 끄기 | ✅ | 배터리: 1분 어둡게, 2분 끄기, 5분 절전 |
+| 전력 최적화 | 🟡 | TEO, 스피커 유휴 절전, PCIe ASPM L1.2, 배터리 시 고성능 코어 2.2 GHz 제한, 쓰기 주기 15초, zram. 유휴 약 4 W(오전 3.8~4.9 W) |
+| 키보드 Caps Lock LED | ⚠️ | 동작하지만 순정보다 어두움(원인 미상) |
+| 가상 키보드 | 🟡 | Plasma 키보드는 Esc·화살표와 한글이 없음. fcitx5-osk 빌드는 중단됨(메모리 부족) |
+
+## 앞으로 할 일
+
+1. **재시험:** 덮기 → 깨우기 → 첫 키 입력에 태블릿 모드가 풀리는지(`36369b9`), 두 번째 덮기도 절전되는지(`4d849bd`).
+2. **덮개를 열 때 깨우기:** 키보드 UART나 gpio81을 s2idle 깨우기 소스로 등록합니다(드라이버 작업).
+3. **가상 키보드:** fcitx5-osk를 `CARGO_BUILD_JOBS=2`로 다시 빌드하고(zram이 켜져 있어야 함), KWin 입력기를 "Fcitx 5 Osk Kwin Launcher"로 바꿉니다.
+4. **유휴 전력:** 앱을 모두 닫고 밝기 50%에서 다시 잽니다. plasmashell과 타이머 깨움을 줄이고, ADSP `q6v5 handover` 폭주가 재발하는지 봅니다.
+5. **libssc 안정성:** `report_received` 크래시가 NULL GError 수정 뒤에도 남는지 지켜봅니다.
+6. **Caps Lock LED가 어두운 원인:** 안드로이드에서 UART를 캡처해 비교합니다.
+7. **보류:** SSD 이미지 쓰기, FEX/Steam.
+
+자세한 사실, 백업 위치, 되돌리는 방법은 [docs/handoff-2026-11-16.md](docs/handoff-2026-11-16.md)에 있습니다.
 
 USB 메모리는 쓰기 지연(1회 약 175ms)이 커서 Plasma가 수 분씩 멈췄습니다. **NVMe SSD를 권장**합니다.
 
