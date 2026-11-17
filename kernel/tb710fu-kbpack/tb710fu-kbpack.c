@@ -197,6 +197,13 @@ static void kbp_packet(struct kbpack *kb, const u8 *p, int n)
 		return;
 	if (log_packets && p[0] != 0x11 && p[0] != 0x12 && p[0] != 0x13)
 		dev_info(&kb->serdev->dev, "packet %*ph\n", n, p);
+	/* keys and touch come only while unfolded: if the "unfolded" packet was lost (it is sent
+	 * once, e.g. while the tablet was suspended), clear tablet mode, or libinput keeps the
+	 * keyboard and touchpad off (2026-11-17) */
+	if ((p[0] == 0x11 || p[0] == 0x13) && test_bit(SW_TABLET_MODE, kb->sw->sw)) {
+		input_report_switch(kb->sw, SW_TABLET_MODE, 0);
+		input_sync(kb->sw);
+	}
 	switch (p[0]) {
 	case 0x11:
 		if (n >= 10)
