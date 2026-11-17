@@ -112,3 +112,16 @@ kernel from kernel.yml run 43799637253):
   another signal (ambient light is the candidate); lid-close suspend is not implemented.
 - The device-side daemon keeps running only for the input method switch when the driver is
   bound (`/sys/bus/serial/drivers/tb710fu-kbpack` exists).
+
+## Closing the cover over the screen -> suspend (tb710fu-lid, 2026-11-17)
+
+Closing the keyboard over the screen and folding it behind the tablet send the same packets
+(`15 03 02 01 00` / `01`, i.e. `SW_TABLET_MODE`, with chatter); the 1 s status frame
+`16 04 04 02 bb 00` does not change either (`log_packets=1` capture). The ambient light sensor
+tells them apart: open 503-561 lux, **closed 115-256 lux**, folded back 635 lux.
+
+`build/rootfs-files/tb710fu-lid` (service `tb710fu-lid`): the fold switch held for 1.5 s and the
+light below 50 % of the level just before -> `systemctl suspend`; darker than 20 lux before:
+no decision. Verified: `cover closed (light 543 -> 102 lux): suspend`, s2idle, woken with the
+power button. Opening the cover does not wake the tablet (s2idle wakes on the power button
+and the RTC only).

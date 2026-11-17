@@ -1,0 +1,107 @@
+#!/usr/bin/python3
+"""Suspend when the Keyboard Pack is closed over the screen (tb710fu-lid.service).
+
+The keyboard reports closing it over the screen and folding it behind the tablet the same way
+(15 03 02 01 00 -> SW_TABLET_MODE=1, with chatter while the cover moves); no packet tells them
+apart (2026-11-17). The ambient light sensor does: closed, the cover dims it to 20-45 % of the
+level just before (503-561 -> 115-256 lux); folded back it stays or gets brighter (635 lux).
+
+So: SW_TABLET_MODE held at 1 for HOLD s and the light fell below RATIO of what it was just
+before -> systemctl suspend. Too dark beforehand (< MIN_LUX) to tell -> do nothing. Waking
+up is the power button (s2idle wakes only on it and the RTC).
+
+    tb710fu-lid             run (needs iio-sensor-proxy for the light level)
+    tb710fu-lid --selftest  decision checks
+"""
+import collections
+import statistics
+import subprocess
+import sys
+import threading
+import time
+
+NAME = "Lenovo Keyboard Pack Tablet Mode"
+EV_SW, SW_TABLET_MODE = 5, 1
+HOLD = 1.5        # s the fold switch must stay set: rides out the chatter
+MIN_LUX = 20.0    # darker than this before closing: can't tell closed from folded
+RATIO = 0.5       # closed: light below this share of the level before
+
+lux = collections.deque(maxlen=600)  # (monotonic time, lux)
+
+
+def log(*a):
+    print(*a, flush=True)
+
+
+def closed(before, after):
+    """light samples before the fold switch and after HOLD -> cover closed over the screen?"""
+    if not before or not after:
+        return False
+    b, a = statistics.median(before), statistics.median(after)
+    return b >= MIN_LUX and a < RATIO * b
+
+
+def window(t0, t1):
+    return [v for t, v in list(lux) if t0 <= t <= t1]
+
+
+def light():
+    while True:
+        p = subprocess.Popen(["stdbuf", "-oL", "monitor-sensor"], stdout=subprocess.PIPE,
+                             stderr=subprocess.DEVNULL, text=True)
+        for line in p.stdout:
+            if "Light changed:" in line:
+                try:
+                    lux.append((time.monotonic(), float(line.split(":")[1].split()[0])))
+                except ValueError:
+                    pass
+        p.wait()
+        time.sleep(5)  # proxy restarting
+
+
+def run():
+    import evdev
+    threading.Thread(target=light, daemon=True).start()
+    while True:
+        dev = next((d for d in map(evdev.InputDevice, evdev.list_devices()) if d.name == NAME), None)
+        if dev is None:  # keyboard not attached
+            time.sleep(2)
+            continue
+        log("watching", dev.path)
+        state, since, decided = 0, None, True
+        try:
+            while True:
+                import select
+                if select.select([dev.fd], [], [], 0.2)[0]:
+                    for e in dev.read():
+                        if e.type == EV_SW and e.code == SW_TABLET_MODE:
+                            if e.value and not state:
+                                since, decided = time.monotonic(), False
+                            state = e.value
+                if state and not decided and time.monotonic() - since >= HOLD:
+                    decided = True
+                    before = window(since - 6, since - 0.3)
+                    after = window(time.monotonic() - 1, time.monotonic())
+                    b = statistics.median(before) if before else None
+                    a = statistics.median(after) if after else None
+                    if closed(before, after):
+                        log("cover closed (light %.0f -> %.0f lux): suspend" % (b, a))
+                        subprocess.run(["systemctl", "suspend"])
+                    else:
+                        log("folded back or too dark (light %s -> %s lux): no suspend" % (b, a))
+        except OSError:  # keyboard detached: its input devices go away
+            log("device gone")
+            time.sleep(1)
+
+
+def selftest():
+    assert closed([503, 561, 540], [115, 256, 150])        # closed (2026-11-17)
+    assert not closed([503, 561], [635, 640])               # folded back: brighter
+    assert not closed([503], [400])                         # dimmer, but not by half
+    assert not closed([12.3, 12.4], [3.0])                  # too dark to tell
+    assert not closed([], [1.0]) and not closed([500], [])  # no readings
+    print("selftest ok")
+
+
+if __name__ == "__main__":
+    {"--selftest": selftest}.get(sys.argv[1] if sys.argv[1:] else "", run)()

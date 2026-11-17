@@ -218,6 +218,23 @@ EOF
 
 	log "Android userdata tools + safe slot-b updates from Linux"
 	sudo install -Dm755 "$HERE/rootfs-files/tb710fu-cpucap" "$R/usr/local/sbin/tb710fu-cpucap"
+	# suspend when the Keyboard Pack is closed over the screen (fold switch + ambient light)
+	sudo install -Dm755 "$HERE/rootfs-files/tb710fu-lid" "$R/usr/bin/tb710fu-lid"
+	printf '[Unit]
+Description=TB710FU: suspend when the Keyboard Pack is closed over the screen
+After=iio-sensor-proxy.service
+
+[Service]
+ExecStart=/usr/bin/tb710fu-lid
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+' |
+		sudo tee "$R/etc/systemd/system/tb710fu-lid.service" >/dev/null
+	# PCIe (Wi-Fi) L1.1/L1.2: Wi-Fi stayed up with it (2026-11-17)
+	echo "w /sys/module/pcie_aspm/parameters/policy - - - - powersupersave" | sudo tee "$R/etc/tmpfiles.d/tb710fu-aspm.conf" >/dev/null
 	sudo install -Dm755 -t "$R/usr/local/sbin" "$HERE/rootfs-files/tb710fu-android-fbe" 		"$HERE/rootfs-files/tb710fu-install-userdata" "$HERE/rootfs-files/tb710fu-update-slot-b"
 	# file managers: no internal UFS partitions (sda..sdf, 70-odd of them)
 	echo 'SUBSYSTEM=="block", ENV{ID_PATH}=="platform-1d84000.ufshc-*", ENV{UDISKS_IGNORE}="1"' |
@@ -385,7 +402,7 @@ printf '[zram0]\nzram-size = ram / 2\ncompression-algorithm = zstd\n' > /etc/sys
 # performance cores capped at ~2.2 GHz on battery (tb710fu-cpucap)
 echo 'SUBSYSTEM=="power_supply", ACTION=="change", RUN+="/usr/local/sbin/tb710fu-cpucap"' > /etc/udev/rules.d/90-tb710fu-cpucap.rules
 printf '[Unit]\nDescription=TB710FU: cap performance cores on battery\n\n[Service]\nType=oneshot\nExecStart=/usr/local/sbin/tb710fu-cpucap\n\n[Install]\nWantedBy=multi-user.target\n' > /etc/systemd/system/tb710fu-cpucap.service
-systemctl enable tb710fu-cpucap.service
+systemctl enable tb710fu-cpucap.service tb710fu-lid.service
 rm -rf /var/cache/pacman/pkg/*
 # file capabilities (ping, kwin_wayland, ...): Android's busybox tar drops xattrs when the rootfs
 # tarball is unpacked into /data/linux, so tb710fu-firstboot re-applies them from this list
