@@ -1,0 +1,7 @@
+singleton TermState TermState.qml
+TerminalRow TerminalRow.qml
+LangKey LangKey.qml
+ShiftLabelKey ShiftLabelKey.qml
+EnterLabelKey EnterLabelKey.qml
+SplitGap SplitGap.qml
+SplitSpaceKey SplitSpaceKey.qml

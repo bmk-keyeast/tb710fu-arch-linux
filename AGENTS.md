@@ -27,7 +27,7 @@
 11. **`/tmp`는 램입니다.** 큰 파일은 `/var/tmp`나 `~/build`에 둡니다.
 12. **KWin `edrPolicy`는 `never`로 둡니다.** GAMMA_LUT/CTM 커밋은 이 패널의 DSI 링크를 깨뜨립니다. gamescope를 KMS에 직접 붙이는 시험도 사용자 동의 없이 하지 않습니다.
 13. **측정하느라 바꾼 시스템 설정은 끝나면 되돌립니다.**
-14. **비밀번호와 토큰을 파일이나 저장소에 남기지 않습니다.** 이 저장소는 공개되어 있습니다. 글꼴, 테마 같은 개인 설정도 넣지 않습니다.
+14. **비밀번호와 토큰을 파일이나 저장소에 남기지 않습니다.** 이 저장소는 공개되어 있습니다. 글꼴, 테마 같은 개인 설정도 넣지 않습니다. 터치 키보드만 복구용으로 `touch-keyboard/`에 둡니다.
 
 위험한 시험은 kShimC 메뉴에서 리눅스를 골라 부팅한 상태에서 하세요. 리셋되면 메뉴 기본값인 안드로이드로 돌아오고 루프에 빠지지 않습니다.
 
@@ -86,6 +86,7 @@ echo +20 | sudo tee /sys/class/rtc/rtc0/wakealarm; systemctl suspend
 | `kernel/required-options.txt` | 꼭 유지할 커널 옵션 |
 | `.github/workflows/` | `kernel.yml`, `kshim.yml`, `kshim-themes.yml`, `rootfs.yml` |
 | `android/` | 안드로이드에서 실행하는 설치, 복구 스크립트 |
+| `touch-keyboard/` | 터치 키보드 자판, 입력기 설정, 복구 스크립트 |
 | `upstream/` | 업스트림 제출용 패치 |
 
 ## 4. 부팅 구조
@@ -272,7 +273,22 @@ KernelSU LKM은 **init_boot_a**만 패치하므로 kShimC와 상관없습니다.
 - UART는 키보드 전원이 켜진 동안에만 엽니다.
 - 절전 중에 "펴짐" 신호를 놓치면, 키 입력이나 터치로 태블릿 모드가 풀립니다.
 - 패킷 기록: `echo 1 | sudo tee /sys/module/tb710fu_kbpack/parameters/log_packets`
-- 기기의 `tb710fu-keyboard` 데몬은 저장소 버전과 다릅니다. 덮어쓰지 마세요.
+- 기기의 `tb710fu-keyboard` 데몬은 `build/rootfs-files/`의 버전과 다릅니다. 기기용은 `touch-keyboard/tb710fu-keyboard`입니다.
+
+### 터치 키보드
+
+키보드 팩을 떼면 Plasma 키보드, 붙이면 fcitx5를 씁니다. 데몬이 `SW_DOCK`을 보고 KWin 입력기를 바꿉니다.
+
+```bash
+sudo bash touch-keyboard/install.sh   # 태블릿에서 전체 복구
+```
+
+- **자판:** `layouts/`는 `~/.local/share/plasma/keyboard/layouts/`로 복사되며 시스템 자판보다 우선합니다. 가로 화면에서는 좌우로 나뉘고 안쪽에 예비 키가 한 줄씩 있습니다.
+- **간격:** `layouts/tb710fu/SplitGap.qml`의 `gapRatio`로 조절합니다.
+- **입력:** `layouts/tb710fu/TermInputMethod.qml`이 두벌식을 조합합니다. Ctrl 조합은 제어 문자를 보내므로 터미널에서만 동작합니다.
+- **자동 표시:** `tb710fu-osk-tap`은 이미 포커스된 입력 칸을 탭해도 키보드를 띄웁니다.
+- **수정한 뒤:** `~/.cache/plasma-keyboard/qmlcache`를 지우고 입력기를 다시 시작합니다. 캐시가 남으면 영문 자판이 기본 자판으로 돌아갈 수 있습니다. 바꾼 파일은 이 폴더에도 반영합니다.
+- **주의:** fcitx5 상태를 D-Bus로 조회하면 입력기가 아닌 fcitx5가 자동 실행될 수 있습니다. 먼저 `NameHasOwner`로 확인합니다.
 
 ## 8. 센서
 

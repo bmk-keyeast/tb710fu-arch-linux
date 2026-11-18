@@ -1,0 +1,12 @@
+[Unit]
+Description=TB710FU: show the on-screen keyboard when a focused text field is tapped
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/python3 %h/.local/bin/tb710fu-osk-tap
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=graphical-session.target

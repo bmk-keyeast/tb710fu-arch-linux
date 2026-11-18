@@ -1,0 +1,6 @@
+[Hotkey]
+EnumerateWithTriggerKeys=True
+
+[Hotkey/TriggerKeys]
+0=Hangul
+1=Alt_R

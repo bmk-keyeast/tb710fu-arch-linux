@@ -1,0 +1,71 @@
+#!/usr/bin/python3
+"""Show the on-screen keyboard when an already focused text field is tapped.
+
+KWin only shows it when a text field gains focus, so a field focused before the keyboard pack
+was detached (or after the hide key) would otherwise stay without a keyboard.
+"""
+import array, fcntl, os, subprocess, time
+import evdev
+from evdev import ecodes as e
+
+TOUCH = os.environ.get("TB710FU_OSK_TOUCH", "NVTCapacitiveTouchScreen")
+TAP_SECONDS = 0.35
+TAP_TRAVEL = 0.02  # fraction of the touch range
+BUS = ["busctl", "--user"]
+VK = ["org.kde.KWin", "/VirtualKeyboard", "org.kde.kwin.VirtualKeyboard"]
+
+
+def prop(name):
+    r = subprocess.run(BUS + ["get-property", *VK, name], capture_output=True, text=True, timeout=3)
+    return r.stdout.strip() == "b true"
+
+
+def docked():
+    for path in evdev.list_devices():
+        d = evdev.InputDevice(path)
+        if e.SW_DOCK in d.capabilities().get(e.EV_SW, []):
+            bits = array.array("B", [0] * 8)
+            fcntl.ioctl(d.fd, (2 << 30) | (8 << 16) | (0x45 << 8) | 0x1b, bits)  # EVIOCGSW
+            return bool(bits[e.SW_DOCK // 8] >> (e.SW_DOCK % 8) & 1)
+    return False
+
+
+def tapped():
+    time.sleep(0.2)  # let a focus change settle first
+    if prop("active") and prop("activeClientSupportsTextInput") and not prop("visible") and not docked():
+        subprocess.run(BUS + ["call", *VK, "forceActivate"], capture_output=True, timeout=3)
+
+
+def main():
+    dev = next(d for d in map(evdev.InputDevice, evdev.list_devices()) if d.name == TOUCH)
+    caps = dict(dev.capabilities()[e.EV_ABS])
+    limit_x = caps[e.ABS_MT_POSITION_X].max * TAP_TRAVEL
+    limit_y = caps[e.ABS_MT_POSITION_Y].max * TAP_TRAVEL
+    fingers = peak = 0
+    x = y = x0 = y0 = None
+    start = 0.0
+    hidden = moved = False
+    for ev in dev.read_loop():
+        if ev.type == e.EV_ABS and ev.code == e.ABS_MT_TRACKING_ID:
+            if ev.value >= 0:
+                if fingers == 0:
+                    start, peak, moved, x0, y0 = ev.timestamp(), 0, False, None, None
+                    hidden = not prop("visible")
+                fingers += 1
+                peak = max(peak, fingers)
+            elif fingers:
+                fingers -= 1
+                if fingers == 0 and peak == 1 and hidden and not moved and ev.timestamp() - start < TAP_SECONDS:
+                    tapped()
+        elif ev.type == e.EV_ABS and ev.code == e.ABS_MT_POSITION_X:
+            x = ev.value
+        elif ev.type == e.EV_ABS and ev.code == e.ABS_MT_POSITION_Y:
+            y = ev.value
+        elif ev.type == e.EV_SYN and fingers:
+            if x0 is None:
+                x0, y0 = x, y
+            elif x is not None and (abs(x - x0) > limit_x or abs(y - y0) > limit_y):
+                moved = True
+
+
+main()
