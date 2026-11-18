@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Lenovo Keyboard Pack UART framing (docs/keyboard.md), shared by the driver and codec-test.c:
+ * Lenovo Keyboard Pack UART framing (AGENTS.md), shared by the driver and codec-test.c:
  *   7E FF esc(seed scrambled[0..n-1] sum8) 7E      keyboard -> host
  *   7E 7E FF esc(seed scrambled[0..n-1] sum8) 7E   host -> keyboard
  * esc: 7D -> 7D 5D, 7E -> 7D 5E. sum8 covers the escaped (wire) bytes of seed + payload.

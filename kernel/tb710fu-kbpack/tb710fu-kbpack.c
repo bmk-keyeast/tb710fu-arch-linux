@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Lenovo Keyboard Pack (TB710FU pogo pins): UART keyboard, touchpad and fold switch.
- * Kernel port of tb710fu-arch-linux's tb710fu-keyboard daemon (protocol: docs/keyboard.md).
+ * Kernel port of tb710fu-arch-linux's tb710fu-keyboard daemon (protocol: AGENTS.md).
  *
  * - serdev on QUP1 SE7 (921600 8N1); host TX goes through a buffer enabled by tx-enable-gpios
  * - plug detect stays gpio-keys' SW_DOCK (gpio81); an input handler follows it, so the switch

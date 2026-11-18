@@ -3,7 +3,7 @@
  * Lenovo TB710FU booted by the stock ABL from A/B slot b (locked bootloader, GKI v4 layout,
  * tb710fu-arch-linux) instead of kShimC: ArmadaOS' board file plus the Lenovo Keyboard Pack.
  *
- * Keyboard Pack (docs/keyboard.md in tb710fu-arch-linux): 2-wire UART on QUP1 SE7 at
+ * Keyboard Pack (AGENTS.md in tb710fu-arch-linux): 2-wire UART on QUP1 SE7 at
  * 921600 8N1, plug detect on gpio81, host TX enable on gpio100.
  *
  * Pogo VDD = PM8550 LDO8 (L8B). Stock lenovo_keyboard.ko sets exactly 3.300 V and enables it

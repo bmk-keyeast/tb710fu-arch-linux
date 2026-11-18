@@ -1,6 +1,6 @@
 #!/system/bin/sh
 # Install the CI Linux rootfs into Android's /data as /data/linux (ROOT_DEV=userdata), as root on
-# the running Android (KernelSU). Needs Android's encryption off (docs/userdata.md).
+# the running Android (KernelSU). Needs Android's encryption off (AGENTS.md).
 #
 #   adb push android/install-linux-data.sh /data/local/tmp/
 #   adb push out/tb710fu-personal.tar /data/local/tmp/        # build.sh personal: Wi-Fi, SSH, DSP libs

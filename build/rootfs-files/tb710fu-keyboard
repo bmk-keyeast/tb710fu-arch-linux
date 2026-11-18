@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 """Lenovo Keyboard Pack (pogo pins, UART) -> uinput keyboard, touchpad and tablet-mode switch.
 
-Protocol and pins: docs/keyboard.md. DT (build/patches/kernel-0001-keyboard-pack.patch) gives
+Protocol and pins: AGENTS.md. DT (build/patches/kernel-0001-keyboard-pack.patch) gives
 the QUP1 SE7 UART (ttyHS2: qcom_geni_serial names non-console ports ttyHS<alias>),
 the keyboard-vdd virtual consumer on L8B and SW_DOCK on gpio81.
     tb710fu-keyboard             run (systemd: tb710fu-keyboard.service)

@@ -1,6 +1,6 @@
 # TB710FU 커널 재컴파일과 재패키징
 
-커널을 고쳐서 빌드하고, boot_a 이미지로 만들어 기기에 넣는 절차입니다. 최종 목표는 **태블릿 안에서 컴파일과 패키징을 모두 끝내는 것**입니다. 현재 시스템 상태는 [SYSTEM-STATE.md](SYSTEM-STATE.md)를 보세요.
+커널을 고쳐서 빌드하고, boot_a 이미지로 만들어 기기에 넣는 절차입니다. 최종 목표는 **태블릿 안에서 컴파일과 패키징을 모두 끝내는 것**입니다. 지금 설치된 커널은 [SYSTEM-STATE.md](SYSTEM-STATE.md)를 보세요.
 
 > **boot_a 쓰기는 사용자의 명시적 동의를 받은 뒤에만 합니다.** 컴파일과 패키징까지는 기기에 아무 영향이 없습니다.
 
@@ -208,4 +208,54 @@ sudo systemctl daemon-reload && sudo systemctl start systemd-zram-setup@zram0 de
 | `rollback` | **아직 안 함** |
 | 기기에서 전체 컴파일(`build`) | **아직 안 함** |
 | 새 커널 부팅 | ✔ 2026-11-18. 실패한 서비스 없음, q6v5 수정 동작, 앰프 4개 시작 성공, 센서 동작 |
-| 새 커널에서 절전 반복과 키보드 입력 | **아직 안 함** |
+| 새 커널에서 키보드 입력 | ✔ 2026-11-18. 사용자 확인 |
+| 새 커널에서 절전 반복 | **아직 안 함** |
+
+## 11. 업스트림 제출
+
+패치와 문안은 `upstream/`에 있습니다. **아직 아무 곳에도 제출하지 않았습니다.**
+
+### 메인라인 현황 (v7.4-rc3, next-20261117)
+
+| 항목 | 상태 |
+|---|---|
+| TB710FU 보드 DTS | 없음. patchwork에도 제출된 패치 없음 |
+| SM8650 SoC | 있음 |
+| NT36532 패널 드라이버 | 있음. OnePlus Pad 2의 CSOT 패널용이고 TB710FU 패널은 없음 |
+| 키보드 팩 드라이버 | 없음 |
+
+lore.kernel.org는 자동 접속을 막아 직접 검색하지 못했습니다. 제출 전에 브라우저에서 확인하세요.
+
+### 제출 대상
+
+| 폴더 | 보낼 곳 | 판단 |
+|---|---|---|
+| `upstream/iio-sensor-proxy/` | freedesktop GitLab Merge Request. 설명문은 `merge-request.txt` | **지금 제출 가능.** 태블릿에서 쓰는 코드와 같음 |
+| `upstream/hexagonrpc/` | [PR #21](https://github.com/linux-msm/hexagonrpc/pull/21)에 댓글과 패치 첨부. 문안은 `pr21-comment.txt` | 메인테이너가 쓰기 경로를 `/var` 아래로 두는 설계를 논의 중이라 새 PR 대신 댓글로 시작 |
+| `upstream/kernel-keyboard/` | linux-input에 RFC 패치 메일 | **보류.** 보드 DTS가 메인라인에 들어간 뒤 제출 |
+
+메인라인에 올린다면 순서는 보드 DTS(UFS, USB, 버튼, 화면) → 패널 → 터치와 오디오 → 키보드입니다. 보드 DTS는 ArmadaOS 작업이 바탕이므로 원작자와 출처 표기를 먼저 조율해야 합니다.
+
+### 키보드 패치를 제출할 때 사람이 할 일
+
+1. 패치를 읽고 내용을 이해합니다. 커널 규정상 AI는 `Signed-off-by`를 달 수 없고, 제출자가 내용 전체를 책임집니다.
+2. 프로토콜과 스크램블 표는 순정 `lenovo_keyboard.ko`를 디스어셈블해서 얻었습니다. 이 코드를 제출해도 되는지 본인이 판단합니다.
+3. 정리본은 기기에서 실행한 적이 없습니다. 실제로 시험한 뒤 커버 레터의 `TODO(submitter)` 줄을 결과로 바꿉니다.
+4. `YOUR NAME <you@example.com>`을 본인 이름과 메일로 바꾸고 적용합니다.
+
+```bash
+git clone --depth 1 https://github.com/torvalds/linux.git linux-submit
+cd linux-submit
+git fetch --depth 1 origin 20eef29b7c8465ac98d7dd6d6f2ac07a8d8056ca
+git checkout -b tb710fu-kbpack FETCH_HEAD
+git am --signoff ../upstream/kernel-keyboard/0001-*.patch ../upstream/kernel-keyboard/0002-*.patch
+git format-patch --rfc --base=HEAD~2 -2 -o out/
+cp ../upstream/kernel-keyboard/0000-cover-letter.patch out/
+./scripts/checkpatch.pl --strict out/0001-*.patch out/0002-*.patch
+```
+
+보내기 전에 `--dry-run`으로 확인합니다.
+
+```bash
+git send-email --dry-run --to=dmitry.torokhov@gmail.com --to=linux-input@vger.kernel.org --cc=robh@kernel.org --cc=krzk+dt@kernel.org --cc=conor+dt@kernel.org --cc=rydberg@bitmath.org --cc=devicetree@vger.kernel.org --cc=linux-kernel@vger.kernel.org out/*.patch
+```
