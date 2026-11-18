@@ -200,9 +200,9 @@ sudo systemctl daemon-reload && sudo systemctl start systemd-zram-setup@zram0 de
 
 | 항목 | 상태 |
 |---|---|
-| CI 전체 빌드(Freedom 5c4454f + 패치 0001~0003) | 진행 중, 런 44245007626 |
+| CI 전체 빌드(Freedom 5c4454f + 패치 0001, 0003) | ✔ 런 44250381926(44d67b5). 패치 304개 적용, 필수 옵션 통과 |
 | `check`, `deps`, `fetch`, `prepare`(기기, gcc 16.1.1) | ✔ 2026-11-18. 패치와 설정 통과 |
-| `import`, `package`(기기, 현재 실행 중인 커널의 CI 산출물로 시험) | ✔ 2026-11-18. AVB OK, 키보드 노드 okay |
+| `import`, `package`(기기, 위 CI 커널) | ✔ 2026-11-18. `boot_a.img` `5b1d62e4…`, AVB OK, cmdline 동일, 키보드 노드 okay |
 | `install`, `rollback` | **아직 안 함**(boot_a를 쓰는 단계) |
 | 기기에서 전체 컴파일(`build`) | **아직 안 함** |
 | 새 커널 부팅 | **아직 안 함** |

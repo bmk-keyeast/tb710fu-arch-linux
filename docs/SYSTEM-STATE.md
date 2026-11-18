@@ -64,7 +64,7 @@ ABL(잠금) → boot_a = kShimC 메뉴(iOS 테마, 볼륨 키로 선택, 8초 �
 | 구분 | 내용 |
 |---|---|
 | **기기에서 실행 중** | `7.2.6-tb710fu`, CI 런 43799637253(fd9e0a2) = Freedom b75a6d48 + 오버레이. 키보드 모듈만 36369b9 빌드로 교체됨 |
-| **저장소 최신(아직 기기에 안 씀)** | Freedom 5c4454f + q6v5 수정 + zswap + uinput 내장. 빌드는 [KERNEL-BUILD.md](KERNEL-BUILD.md)의 CI 기록 참고 |
+| **저장소 최신(아직 기기에 안 씀)** | Freedom 5c4454f + q6v5 수정 + zswap(기본 꺼짐) + uinput 내장. CI 런 44250381926(44d67b5). 패키징 완료: 태블릿의 `/var/tmp/tb710fu-kernel/out/kshim/boot_a.img`(`5b1d62e4…`). 부팅 시험 전 |
 
 오버레이 `kernel/armada-overlay/tb710fu-locked`:
 
@@ -124,7 +124,7 @@ ADSP SSC → `hexagonrpcd-adsp-sensorspd`(registry 쓰기 패치) → libssc →
 - 지금은 120 Hz 하나입니다. VRR은 안 됩니다.
 - **144 Hz는 아직 넣지 않습니다.** 순정 DT에 패널 명령(`B2=80 B3=00`)은 있지만, 144 Hz일 때의 DSI 클럭 값이 없습니다. 지금 타이밍에서 VFP만 줄여서는 만들 수 없고 링크 클럭을 올려야 합니다. 안드로이드에서 실제 클럭을 측정하기 전에는 시도하지 마세요.
 - `dsi_err_worker: status=c`(FIFO + MDP FIFO underflow)는 **화면이 꺼질 때 두 DSI 링크에서 한 줄씩** 나옵니다. 2026-11-18에 화면 끄기로 재현했고, 켜져 있는 동안 DPU underrun은 0입니다. 화면 끄기 자체의 오류라면 무시해도 됩니다.
-- **알려진 버그:** 화면만 꺼지고 시스템이 깨어 있으면 터치 드라이버의 `nvt_fw_health_work`가 약 6.6초마다 터치 펌웨어를 다시 올립니다(`touch FW dead, re-flashing`). 패널이 꺼져 펌웨어가 응답하지 않는데도 검사를 계속하기 때문입니다. 화면을 켜면 멈춥니다.
+- **알려진 버그:** 화면만 꺼지고 시스템이 깨어 있으면 터치 드라이버의 `nvt_fw_health_work`가 약 6.6초마다 터치 펌웨어를 다시 올립니다(`touch FW dead, re-flashing`). 패널이 꺼져 펌웨어가 응답하지 않는데도 검사를 계속하기 때문입니다. 화면을 켜면 멈춥니다. 화면이 꺼진 상태의 소비 전력을 재 보니 재플래시 중 0.65 W, 그 사이 0.70 W로 차이가 없어서 고치지 않기로 했습니다(2026-11-18).
 - `msm.separate_gpu_kms=1`을 쓰지 마세요. gamescope가 KMS 장치를 찾지 못합니다.
 
 ## 6. 소프트웨어 구성
