@@ -72,7 +72,8 @@ build/device-kernel.sh package   # boot_a.img 생성과 AVB 검증
 - SSH로 작업한다면 연결이 끊겨도 계속되도록 `systemd-run --user --unit=kbuild build/device-kernel.sh build`로 돌리고 `journalctl --user -fu kbuild`로 봅니다.
 - 기기가 느려지거나 멈추면 `JOBS=2`로 다시 돌립니다.
 - 결과물은 `/var/tmp/tb710fu-kernel/out/kshim/boot_a.img`입니다.
-- `package`는 처음 실행할 때 인터넷이 필요합니다. kShimC 도구는 `kshim-latest` 릴리스에서, initramfs는 `rootfs-latest` 릴리스에서 받습니다.
+- `package`는 처음 실행할 때 인터넷이 필요합니다. kShimC 도구를 `kshim-latest` 릴리스에서 받습니다.
+- initramfs는 지금 시스템이 쓰는 `/boot/initramfs-tb710fu.img`를 그대로 씁니다(sudo 필요). 릴리스의 initramfs는 더 새로운 패키지로 다시 만들어지므로 쓰지 않습니다.
 - 실측 시간: `prepare` 약 1분, `package` 약 30초입니다.
 
 ## 4. CI로 빌드하고 기기에서 패키징

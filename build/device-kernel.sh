@@ -161,7 +161,11 @@ package() {
 	[ "$(sha256sum "$STOCK/boot_a.img" | cut -c1-16)" = "$STOCK_SHA" ] || die "$STOCK/boot_a.img is not the stock image"
 	kshim_tools
 	export T="$W" ROOT_DEV=userdata KBPACK KSHIM_TOOLS="$TOOLS"
-	[ -f "$W/out/initramfs.img" ] || bash "$HERE/build.sh" initramfs
+	# the initramfs this system already boots with: the release one is rebuilt from newer packages
+	if [ ! -f "$W/out/initramfs.img" ]; then
+		mkdir -p "$W/out"
+		sudo cat /boot/initramfs-tb710fu.img > "$W/out/initramfs.img"
+	fi
 	bash "$HERE/build.sh" kshim "$STOCK"
 	log "$W/out/kshim/boot_a.img: $(cut -c1-16 "$W/out/kshim/SHA256SUMS")... (kernel $(kver): $(cat "$STAGE/RUN"))"
 }
@@ -196,6 +200,7 @@ install() {
 	echo "$v" > "$b/RELEASE"
 	rm -rf "/usr/lib/modules/$v"
 	cp -a "$STAGE/lib/modules/$v" /usr/lib/modules/
+	chown -R root:root "/usr/lib/modules/$v"
 	depmod -a "$v"
 	put_boot "$img"
 	log "done. Reboot and pick Arch Linux in the kShimC menu. Back out: CONFIRM=write-boot_a $0 rollback $b"
