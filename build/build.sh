@@ -538,12 +538,18 @@ kshim() {
 	[ -f "$(kimage)" ] || die "run: build.sh kernel"
 	[ -f "$OUT/initramfs.img" ] || die "run: build.sh rootfs"
 	rm -rf "$d" && mkdir -p "$d/tools"
-	gh=$(command -v gh || command -v gh.exe) || die "gh (GitHub CLI) not found"
-	run=${KSHIM_RUN:-$("$gh" run list -R "$GH_REPO" -w kshim.yml -b main -s success -L 1 --json databaseId -q '.[0].databaseId')}
-	[ -n "$run" ] || die "no successful kshim.yml run in $GH_REPO yet"
-	dl="$REPO/out/kshim-download" && rm -rf "$dl" && mkdir -p "$dl"
-	"$gh" run download "$run" -R "$GH_REPO" -n kshim-tb710fu -D "$(wslpath -w "$dl" 2>/dev/null || echo "$dl")"
-	cp "$dl"/* "$d/tools/" && rm -rf "$dl"
+	# KSHIM_TOOLS: a local copy of the tools (build/device-kernel.sh, on the tablet: aarch64 packer)
+	if [ -n "${KSHIM_TOOLS:-}" ]; then
+		run=local
+		cp "$KSHIM_TOOLS"/* "$d/tools/"
+	else
+		gh=$(command -v gh || command -v gh.exe) || die "gh (GitHub CLI) not found"
+		run=${KSHIM_RUN:-$("$gh" run list -R "$GH_REPO" -w kshim.yml -b main -s success -L 1 --json databaseId -q '.[0].databaseId')}
+		[ -n "$run" ] || die "no successful kshim.yml run in $GH_REPO yet"
+		dl="$REPO/out/kshim-download" && rm -rf "$dl" && mkdir -p "$dl"
+		"$gh" run download "$run" -R "$GH_REPO" -n kshim-tb710fu -D "$(wslpath -w "$dl" 2>/dev/null || echo "$dl")"
+		cp "$dl"/* "$d/tools/" && rm -rf "$dl"
+	fi
 	(cd "$d/tools" && sha256sum -c --quiet SHA256SUMS) || die "kshim artifact checksum mismatch"
 	chmod +x "$d/tools/MultiBootKernelPatcher" "$d/tools/UnpackTool"
 

@@ -1,0 +1,36 @@
+# Kernel options this system relies on (without the CONFIG_ prefix). Checked against the final
+# .config by .github/workflows/kernel.yml and build/device-kernel.sh.
+
+# Steam, FEX, Proton, gamescope
+NTSYNC=y
+ARM64_4K_PAGES=y
+BINFMT_MISC=m
+USER_NS=y
+FUSE_FS=m
+OVERLAY_FS=m
+EROFS_FS=m
+SQUASHFS=y
+COMPAT=y
+UCLAMP_TASK=y
+SCHED_CLASS_EXT=y
+DEBUG_INFO_BTF=y
+TRANSPARENT_HUGEPAGE_MADVISE=y
+LRU_GEN_ENABLED=y
+
+# controllers and virtual input
+UHID=y
+HIDRAW=y
+HID_STEAM=m
+JOYSTICK_XPAD=m
+HID_PLAYSTATION=m
+HID_NINTENDO=m
+BT_HIDP=m
+INPUT_UINPUT=y
+
+# memory and power
+ZSWAP=y
+ZSWAP_COMPRESSOR_DEFAULT_ZSTD=y
+CPU_IDLE_GOV_TEO=y
+
+# Keyboard Pack power rail
+REGULATOR_VIRTUAL_CONSUMER=y

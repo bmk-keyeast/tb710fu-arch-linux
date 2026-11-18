@@ -91,3 +91,55 @@ jobs:
           name: kshim-tb710fu
           path: out/
           retention-days: 90
+
+  # the packer for the tablet itself (build/device-kernel.sh package)
+  packer-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - name: Packer (aarch64)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build g++ git
+          git init -q "$A"
+          git -C "$A" remote add origin https://github.com/ArmadaOS-Freedom/armadaos-freedom.git
+          git -C "$A" sparse-checkout set packages/kshim-tools
+          git -C "$A" fetch -q --depth 1 --filter=blob:none origin "$ARMADA_SHA"
+          git -C "$A" checkout -q FETCH_HEAD
+          cmake -S "$A"/packages/kshim-tools/vendor/packer -B pk -DCMAKE_BUILD_TYPE=Release -DBUILD_SHIMS=OFF
+          cmake --build pk --parallel
+          mkdir out-arm64 && cp pk/MultiBootKernelPatcher pk/UnpackTool out-arm64/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kshim-packer-aarch64
+          path: out-arm64/
+          retention-days: 90
+
+  # plain-URL downloads for the tablet, which has no GitHub login
+  release:
+    needs: [build, packer-arm64]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: kshim-tb710fu
+          path: rel
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kshim-packer-aarch64
+          path: rel
+
+      - name: Release kshim-latest
+        run: |
+          cd rel
+          rm -f SHA256SUMS
+          sha256sum * > "$RUNNER_TEMP/sums" && mv "$RUNNER_TEMP/sums" SHA256SUMS && cat SHA256SUMS
+          gh release delete kshim-latest -R "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
+          gh release create kshim-latest -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease             --title "kShimC tools for the tablet (aarch64)"             --notes "kShimC runtime ($(cat STYLE) menu), pack_boot.py, avbtool.py and the aarch64 packer, from $GITHUB_SHA. Used by build/device-kernel.sh."             *
