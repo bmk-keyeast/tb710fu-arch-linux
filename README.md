@@ -6,6 +6,8 @@
 - **루트 파일시스템:** 안드로이드 `/data`(암호화 해제한 userdata) 안의 `/data/linux`에 있습니다(`ROOT_DEV=userdata`). → [docs/userdata.md](docs/userdata.md)
 - **커널:** ArmadaOS Freedom의 7.2.6 unified 커널에 이 저장소의 오버레이(`kernel/armada-overlay/tb710fu-locked`)를 얹어 CI(`kernel.yml`)에서 빌드합니다.
 - **슬롯 b:** 검증된 `v4-e3-20261115` 이미지를 그대로 둡니다. SSD가 없으면 30초 뒤 슬롯 a로 돌아갑니다.
+- **에이전트는 먼저 읽으세요:** [docs/SYSTEM-STATE.md](docs/SYSTEM-STATE.md)에 현재 시스템 상태와 절대 규칙을 정리했습니다.
+- **커널 재컴파일과 재패키징:** [docs/KERNEL-BUILD.md](docs/KERNEL-BUILD.md). 태블릿 안에서 빌드하는 도구는 [build/device-kernel.sh](build/device-kernel.sh)입니다.
 - **인계 문서:** [docs/handoff-2026-11-16.md](docs/handoff-2026-11-16.md)에 지금까지 알아낸 사실과 남은 일을 모두 정리했습니다.
 
 ## 현재 상태 (2026-11-17, 기기 실측)
