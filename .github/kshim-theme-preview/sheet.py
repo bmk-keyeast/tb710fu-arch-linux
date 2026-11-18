@@ -15,7 +15,7 @@ THEMES = {
     "METRO": "Windows Metro풍", "ADWAITA": "GNOME Adwaita풍", "HOLO": "Android Holo풍",
     "GLASS": "반투명 유리", "AURORA": "오로라 그라데이션", "SOFT_UI": "부드러운 입체",
     "BENTO": "벤토 카드", "CARDS": "카드형", "NEON": "네온", "NORD": "Nord 색상",
-    "FLAT": "단순 평면", "MINIMAL": "미니멀", "CLASSIC": "고전 부트로더", "TERMINAL": "터미널",
+    "FLAT": "보라색 그라데이션", "MINIMAL": "미니멀", "CLASSIC": "고전 부트로더", "TERMINAL": "터미널",
     "HIGH_CONTRAST": "고대비", "LVGL_DEFAULT": "LVGL 기본",
 }
 COLS, TILE_W, TILE_H, GAP, LABEL, HEAD = 4, 640, 400, 28, 74, 150
