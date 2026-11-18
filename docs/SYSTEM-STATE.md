@@ -50,7 +50,7 @@ ABL(잠금) → boot_a = kShimC 메뉴(iOS 테마, 볼륨 키로 선택, 8초 �
 
 | 파티션 | 지금 내용 | 해시 앞자리 |
 |---|---|---|
-| boot_a | kShimC + 커널 fd9e0a2 + 키보드 커널 드라이버(`KBPACK=1`) | `987009be` |
+| boot_a | kShimC + 커널 44d67b5 + 키보드 커널 드라이버(`KBPACK=1`). 이전 이미지 `987009be`는 `/var/lib/tb710fu/backup/20261118-153301`에 백업 | `90affd1f` |
 | vbmeta_a | testkey 체인(KSU init_boot, FBE 해제 vendor) | `26dcd75d` |
 | 순정 boot_a | 패키징 재료. 태블릿의 `/var/lib/tb710fu/stock/boot_a.img` | `37bb1bc5` |
 
@@ -63,8 +63,7 @@ ABL(잠금) → boot_a = kShimC 메뉴(iOS 테마, 볼륨 키로 선택, 8초 �
 
 | 구분 | 내용 |
 |---|---|
-| **기기에서 실행 중** | `7.2.6-tb710fu`, CI 런 43799637253(fd9e0a2) = Freedom b75a6d48 + 오버레이. 키보드 모듈만 36369b9 빌드로 교체됨 |
-| **저장소 최신(아직 기기에 안 씀)** | Freedom 5c4454f + q6v5 수정 + zswap(기본 꺼짐) + uinput 내장. CI 런 44250381926(44d67b5). 패키징 완료: 태블릿의 `/var/tmp/tb710fu-kernel/out/kshim/boot_a.img`(`5b1d62e4…`). 부팅 시험 전 |
+| **기기에서 실행 중** | `7.2.6-tb710fu`, CI 런 44250381926(44d67b5) = Freedom 5c4454f + q6v5 수정 + zswap(기본 꺼짐) + uinput 내장. 2026-11-18 설치 |
 
 오버레이 `kernel/armada-overlay/tb710fu-locked`:
 
@@ -72,8 +71,8 @@ ABL(잠금) → boot_a = kShimC 메뉴(iOS 테마, 볼륨 키로 선택, 8초 �
 |---|---|---|
 | `dts/sm8650-lenovo-tb710fu-locked.dts` | 키보드 UART, L8B 가상 소비자, gpio81=`SW_DOCK` | ✔ |
 | `patches/0001-qcom-battmgr-…` | 배터리 전류 부호 반전(upower 충전 표시) | ✔ |
-| `patches/0003-remoteproc-qcom_q6v5-…` | ADSP handover 인터럽트 폭주(초당 5회) 차단 | 미시험 |
-| `config/tb710fu-locked.config` | TEO, f2fs, zswap, uinput 등 | zswap, uinput 내장은 미시험 |
+| `patches/0003-remoteproc-qcom_q6v5-…` | ADSP handover 인터럽트 폭주(초당 5회) 차단 | ✔ handover 멈춤, 오류 로그 0줄 |
+| `config/tb710fu-locked.config` | TEO, f2fs, zswap, uinput 등 | uinput 내장 ✔, zswap 켜기는 미시험 |
 
 꼭 유지할 옵션은 `kernel/required-options.txt`에 있습니다. CI와 기기 빌드가 이 목록을 검사합니다.
 
@@ -177,7 +176,7 @@ echo +20 | sudo tee /sys/class/rtc/rtc0/wakealarm; systemctl suspend
 
 ## 8. 남은 일
 
-1. **새 커널 적용:** 빌드한 커널을 사용자 동의 후 기기에 쓰고, q6v5·zswap을 시험합니다.
+1. **새 커널 재시험:** 절전을 반복한 뒤 충전, 소리, 센서, 키보드가 유지되는지 확인합니다.
 2. **zswap으로 전환:** 새 커널에서 zram을 끄고 zswap을 켭니다([KERNEL-BUILD.md](KERNEL-BUILD.md)의 "zswap 켜기").
 3. **덮개를 열 때 깨우기:** 키보드 UART나 gpio81을 깨우기 소스로 등록합니다.
 4. **유휴 전력:** plasmashell과 macshell의 깨움, 타이머를 줄입니다.

@@ -203,7 +203,9 @@ sudo systemctl daemon-reload && sudo systemctl start systemd-zram-setup@zram0 de
 |---|---|
 | CI 전체 빌드(Freedom 5c4454f + 패치 0001, 0003) | ✔ 런 44250381926(44d67b5). 패치 304개 적용, 필수 옵션 통과 |
 | `check`, `deps`, `fetch`, `prepare`(기기, gcc 16.1.1) | ✔ 2026-11-18. 패치와 설정 통과 |
-| `import`, `package`(기기, 위 CI 커널) | ✔ 2026-11-18. `boot_a.img` `5b1d62e4…`, AVB OK, cmdline 동일, 키보드 노드 okay |
-| `install`, `rollback` | **아직 안 함**(boot_a를 쓰는 단계) |
+| `import`, `package`(기기, 위 CI 커널) | ✔ 2026-11-18. `boot_a.img` `90affd1f…`, AVB OK, cmdline 동일, 키보드 노드 okay |
+| `install` | ✔ 2026-11-18. 기록 후 해시 일치, 백업 생성 |
+| `rollback` | **아직 안 함** |
 | 기기에서 전체 컴파일(`build`) | **아직 안 함** |
-| 새 커널 부팅 | **아직 안 함** |
+| 새 커널 부팅 | ✔ 2026-11-18. 실패한 서비스 없음, q6v5 수정 동작, 앰프 4개 시작 성공, 센서 동작 |
+| 새 커널에서 절전 반복과 키보드 입력 | **아직 안 함** |

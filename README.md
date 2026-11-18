@@ -14,7 +14,7 @@
 
 | 항목 | 상태 | 비고 |
 |---|---|---|
-| kShimC 부트 메뉴(boot_a) | ✅ | iOS 테마, 기본값 안드로이드. 지금 기기의 boot_a는 `987009be…`(키보드 커널 드라이버판, `KBPACK=1`) |
+| kShimC 부트 메뉴(boot_a) | ✅ | iOS 테마, 기본값 안드로이드. 지금 기기의 boot_a는 `90affd1f…`(키보드 커널 드라이버판, `KBPACK=1`) |
 | 안드로이드 암호화 해제 + LTBox KernelSU 루트 | ✅ | `ro.crypto.state=unsupported`. LTBox Unroot와 GKI 모드는 쓰지 말 것 |
 | `/data/linux` 루트 | ✅ | 안드로이드 `/data`는 root만 접근(`/mnt/.android/data`) |
 | KDE Plasma (Wayland), Wi-Fi, SSH | ✅ | freedreno FD750 |
