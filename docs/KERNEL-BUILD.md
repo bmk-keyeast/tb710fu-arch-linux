@@ -142,9 +142,6 @@ busctl get-property net.hadess.SensorProxy /net/hadess/SensorProxy net.hadess.Se
 | q6v5 로그 | `journalctl -b -k -g 'Handover signaled' \| wc -l` | 0 |
 | ADSP 복귀 | 절전을 여러 번 반복한 뒤 충전, 소리, 센서 | 모두 동작 |
 | uinput 내장 | `ls -l /dev/uinput`, `steam-arm64` 컨트롤러 | 장치가 있고 입력됨 |
-| 60 Hz | **마지막에** `kscreen-doctor output.DSI-1.mode.3200x2000@60` | 깨지면 재부팅으로 복구 |
-
-60 Hz 모드는 위험이 남아 있습니다. 같은 기기를 쓰는 다른 프로젝트([deinthoedoka/TB710FU-Archlinux](https://github.com/deinthoedoka/TB710FU-Archlinux/tree/main/deploy/refresh-mode))는 실제 모드 전환 때 패널이 다시 켜지며 화면이 깨졌다고 기록했습니다. 그쪽 드라이버와 환경이 달라 여기서도 똑같을지는 시험해 봐야 합니다.
 
 ## 7. 되돌리기
 

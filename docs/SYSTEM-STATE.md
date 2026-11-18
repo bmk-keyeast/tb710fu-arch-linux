@@ -64,7 +64,7 @@ ABL(잠금) → boot_a = kShimC 메뉴(iOS 테마, 볼륨 키로 선택, 8초 �
 | 구분 | 내용 |
 |---|---|
 | **기기에서 실행 중** | `7.2.6-tb710fu`, CI 런 43799637253(fd9e0a2) = Freedom b75a6d48 + 오버레이. 키보드 모듈만 36369b9 빌드로 교체됨 |
-| **저장소 최신(아직 기기에 안 씀)** | Freedom 5c4454f + q6v5 수정 + zswap + uinput 내장 + 60 Hz 모드. 빌드는 [KERNEL-BUILD.md](KERNEL-BUILD.md)의 CI 기록 참고 |
+| **저장소 최신(아직 기기에 안 씀)** | Freedom 5c4454f + q6v5 수정 + zswap + uinput 내장. 빌드는 [KERNEL-BUILD.md](KERNEL-BUILD.md)의 CI 기록 참고 |
 
 오버레이 `kernel/armada-overlay/tb710fu-locked`:
 
@@ -72,7 +72,6 @@ ABL(잠금) → boot_a = kShimC 메뉴(iOS 테마, 볼륨 키로 선택, 8초 �
 |---|---|---|
 | `dts/sm8650-lenovo-tb710fu-locked.dts` | 키보드 UART, L8B 가상 소비자, gpio81=`SW_DOCK` | ✔ |
 | `patches/0001-qcom-battmgr-…` | 배터리 전류 부호 반전(upower 충전 표시) | ✔ |
-| `patches/0002-drm-panel-nt36532-…-60hz` | 60 Hz 모드 | 미시험 |
 | `patches/0003-remoteproc-qcom_q6v5-…` | ADSP handover 인터럽트 폭주(초당 5회) 차단 | 미시험 |
 | `config/tb710fu-locked.config` | TEO, f2fs, zswap, uinput 등 | zswap, uinput 내장은 미시험 |
 
@@ -124,7 +123,8 @@ ADSP SSC → `hexagonrpcd-adsp-sensorspd`(registry 쓰기 패치) → libssc →
 - KWin `edrPolicy`는 `never`로 둡니다. `always`면 밝기를 바꿀 때 DSI 오류가 나고 화면이 깨집니다.
 - 지금은 120 Hz 하나입니다. VRR은 안 됩니다.
 - **144 Hz는 아직 넣지 않습니다.** 순정 DT에 패널 명령(`B2=80 B3=00`)은 있지만, 144 Hz일 때의 DSI 클럭 값이 없습니다. 지금 타이밍에서 VFP만 줄여서는 만들 수 없고 링크 클럭을 올려야 합니다. 안드로이드에서 실제 클럭을 측정하기 전에는 시도하지 마세요.
-- 이 부팅에서 120 Hz인데도 `dsi_err_worker: status=c`가 8번 기록됐습니다(2026-11-18, 원인 미상).
+- `dsi_err_worker: status=c`(FIFO + MDP FIFO underflow)는 **화면이 꺼질 때 두 DSI 링크에서 한 줄씩** 나옵니다. 2026-11-18에 화면 끄기로 재현했고, 켜져 있는 동안 DPU underrun은 0입니다. 화면 끄기 자체의 오류라면 무시해도 됩니다.
+- **알려진 버그:** 화면만 꺼지고 시스템이 깨어 있으면 터치 드라이버의 `nvt_fw_health_work`가 약 6.6초마다 터치 펌웨어를 다시 올립니다(`touch FW dead, re-flashing`). 패널이 꺼져 펌웨어가 응답하지 않는데도 검사를 계속하기 때문입니다. 화면을 켜면 멈춥니다.
 - `msm.separate_gpu_kms=1`을 쓰지 마세요. gamescope가 KMS 장치를 찾지 못합니다.
 
 ## 6. 소프트웨어 구성
@@ -177,7 +177,7 @@ echo +20 | sudo tee /sys/class/rtc/rtc0/wakealarm; systemctl suspend
 
 ## 8. 남은 일
 
-1. **새 커널 적용:** 빌드한 커널을 사용자 동의 후 기기에 쓰고, q6v5·zswap·60 Hz를 시험합니다.
+1. **새 커널 적용:** 빌드한 커널을 사용자 동의 후 기기에 쓰고, q6v5·zswap을 시험합니다.
 2. **zswap으로 전환:** 새 커널에서 zram을 끄고 zswap을 켭니다([KERNEL-BUILD.md](KERNEL-BUILD.md)의 "zswap 켜기").
 3. **덮개를 열 때 깨우기:** 키보드 UART나 gpio81을 깨우기 소스로 등록합니다.
 4. **유휴 전력:** plasmashell과 macshell의 깨움, 타이머를 줄입니다.

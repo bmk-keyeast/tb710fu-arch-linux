@@ -11,7 +11,6 @@ by `.github/workflows/kernel.yml`.
 
 - `patches/0001-qcom-battmgr-tb710fu-current-sign.patch`: the ADSP reports the battery current
   with the opposite sign; flipped for `lenovo,tb710fu` so upower shows charging.
-- `patches/0002-drm-panel-nt36532-tb710fu-60hz-mode.patch`: a 60 Hz mode (120 Hz timing, vtotal doubled). Not tried on the device yet.
 - `patches/0003-remoteproc-qcom_q6v5-handover-once.patch`: stops the ADSP handover interrupt storm (deinthoedoka/TB710FU-Archlinux).
 - `CONFIG_ZSWAP` (off by default), `CONFIG_INPUT_UINPUT=y`.
 - `CONFIG_CPU_IDLE_GOV_TEO` (selected by `cpuidle.governor=teo` in build/config.env).
