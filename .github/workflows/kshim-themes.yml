@@ -1,0 +1,106 @@
+# Renders every kShimC menu theme at the TB710FU's resolution with kShimC's own LVGL menu code
+# (tests/ui_preview_test.c on the host) and builds a contact sheet. Nothing here touches boot_a.
+name: kshim-themes
+
+on:
+  workflow_dispatch:
+    inputs:
+      styles:
+        description: JSON list of themes
+        default: '["IOS_HIG","CUPERTINO","STAR_CHART","HARMONYOS","ONE_UI","CLOVER","MATERIAL3","MATERIAL2","MATERIAL2_DARK","FLUENT","FLUENT_DARK","FLUENT2","FLUENT2_DARK","SURFACE","SURFACE_DARK","METRO","ADWAITA","HOLO","GLASS","AURORA","SOFT_UI","BENTO","CARDS","NEON","NORD","FLAT","MINIMAL","CLASSIC","TERMINAL","HIGH_CONTRAST","LVGL_DEFAULT"]'
+
+env:
+  ARMADA_SHA: b75a6d48e006782b886627dc2dee2b8691aa64f6
+  # not under the checkout: gcc predefines `linux`, which breaks LVGL's stringified config path
+  A: /home/runner/work/_temp/armada
+
+jobs:
+  render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        style: ${{ fromJSON(inputs.styles) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build device-tree-compiler python3-pil
+
+      - name: kShimC sources at the commit the tablet's menu is built from
+        run: |
+          git init -q "$A"
+          git -C "$A" remote add origin https://github.com/ArmadaOS-Freedom/armadaos-freedom.git
+          git -C "$A" sparse-checkout set devices/lenovo-tb323fu/boot/kshim-success-source
+          git -C "$A" fetch -q --depth 1 --filter=blob:none origin "$ARMADA_SHA"
+          git -C "$A" checkout -q FETCH_HEAD
+          K="$A/devices/lenovo-tb323fu/boot/kshim-success-source"
+          echo "K=$K" >> "$GITHUB_ENV"
+          dep() { git init -q "$K/$1"; git -C "$K/$1" remote add origin "$2"
+                  git -C "$K/$1" fetch -q --depth=1 origin "$3"; git -C "$K/$1" checkout -q --detach FETCH_HEAD; }
+          dep lib/CrDK https://github.com/Project-Aloha/CrDK b6c3335136b7f6b28271917de11e8f11982975fc
+          dep lib/picolibc https://github.com/picolibc/picolibc f7edb0869e64b9d687f46961adeef7154921fe92
+          dep third_party/lvgl https://github.com/lvgl/lvgl 7f07a129e8d77f4984fff8e623fd5be18ff42e74
+          dep build/dependency-sources/kShimC https://github.com/sunflower2333/kShimC 82ce6eaa10c36e64cfd3f16799172d854f9a955b
+          git -C "$K/build/dependency-sources/kShimC" archive HEAD lib/libfdt | tar -x -C "$K"
+          sed -i '/^#include <stdint.h>$/a #include <stdlib.h>' "$K/lib/libfdt/include/libfdt_env.h"
+          sed -i 's/\r$//' "$K/ports/crdk/patches/"*.patch
+
+      - name: Add the TB710FU menu to the preview program
+        run: |
+          cp .github/kshim-theme-preview/tb710fu_preview.inc "$K/tests/"
+          python3 -I - "$K/tests/ui_preview_test.c" <<'EOF'
+          import sys
+          p = sys.argv[1]
+          s = open(p, encoding="utf-8").read()
+          old = "int main(int ArgumentCount, char **Arguments)\n{\n"
+          new = '#include "tb710fu_preview.inc"\n\n' + old + (
+              '    if (ArgumentCount == 3 && strcmp(Arguments[2], "--tb710fu") == 0) {\n'
+              '        assert(kshim_menu_set_language(KSHIM_MENU_LANG_EN) == 0);\n'
+              '        RenderTb710fu(Arguments[1]);\n'
+              '        return 0;\n'
+              '    }\n')
+          assert s.count(old) == 1
+          open(p, "w", encoding="utf-8").write(s.replace(old, new))
+          EOF
+
+      - name: Render ${{ matrix.style }}
+        run: |
+          cmake -S "$K/tests" -B "$RUNNER_TEMP/b" -G Ninja -DKSHIM_TEST_MENU_STYLE=${{ matrix.style }} -DKSHIM_TEST_SANITIZERS=OFF
+          cmake --build "$RUNNER_TEMP/b" --parallel 4 --target ui_preview_test
+          mkdir -p previews
+          "$RUNNER_TEMP/b/ui_preview_test" previews --tb710fu
+          python3 -I -c "from PIL import Image; Image.open('previews/menu-3200x2000-tb710fu.ppm').save('previews/${{ matrix.style }}.png', optimize=True)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: theme-${{ matrix.style }}
+          path: previews/${{ matrix.style }}.png
+          retention-days: 30
+
+  sheet:
+    needs: render
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-pil fonts-noto-cjk
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: theme-*
+          merge-multiple: true
+          path: themes
+      - run: python3 -I .github/kshim-theme-preview/sheet.py themes kshim-themes.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kshim-themes-sheet
+          path: |
+            kshim-themes.png
+            themes/*.png
+          retention-days: 30
