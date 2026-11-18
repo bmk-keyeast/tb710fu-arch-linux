@@ -29,7 +29,7 @@ jobs:
       - name: Build dependencies
         # apt-get update alone took minutes on the runner: everything comes from pip where possible
         run: |
-          pip3 install --break-system-packages -q kconfiglib==14.1.0 ninja pillow
+          sudo pip3 install --break-system-packages -q kconfiglib==14.1.0 ninja pillow
           sudo apt-get install -y --no-install-recommends device-tree-compiler ||
             { sudo apt-get update && sudo apt-get install -y --no-install-recommends device-tree-compiler; }
 
@@ -91,7 +91,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: |
-          pip3 install --break-system-packages -q pillow
+          sudo pip3 install --break-system-packages -q pillow
           for w in Regular Bold; do
             curl -fsSL -o "/tmp/NotoSansCJKkr-$w.otf" "https://raw.githubusercontent.com/notofonts/noto-cjk/main/Sans/OTF/Korean/NotoSansCJKkr-$w.otf"
           done
