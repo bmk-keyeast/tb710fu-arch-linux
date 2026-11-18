@@ -19,7 +19,7 @@ THEMES = {
     "HIGH_CONTRAST": "고대비", "LVGL_DEFAULT": "LVGL 기본",
 }
 COLS, TILE_W, TILE_H, GAP, LABEL, HEAD = 4, 640, 400, 28, 74, 150
-FONT = "/usr/share/opentype/noto/NotoSansCJK-%s.ttc"
+FONT = "/tmp/NotoSansCJKkr-%s.otf"
 
 src, out = pathlib.Path(sys.argv[1]), sys.argv[2]
 found = [s for s in THEMES if (src / f"{s}.png").exists()]
