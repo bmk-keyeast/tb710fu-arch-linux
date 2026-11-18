@@ -164,7 +164,7 @@ cp -a $B/modules /data/linux/usr/lib/modules/$(cat $B/RELEASE)
 
 ## 8. zswap 켜기
 
-새 커널에는 zswap이 내장되어 있지만 **기본으로 꺼져 있습니다.** zram과 함께 켜면 이중으로 압축되므로, zram을 끄고 켭니다. 이 절차는 아직 기기에서 시험하지 않았습니다.
+커널에는 zswap이 내장되어 있지만 **기본으로 꺼져 있습니다.** zram과 함께 켜면 이중으로 압축되므로, zram을 끄고 켭니다. 지금 기기는 2026-11-18에 전환을 마쳤으므로(8 GB 스왑 파일 하나), 아래 절차는 시스템을 새로 설치했을 때만 필요합니다.
 
 ```bash
 sudo mv /etc/systemd/zram-generator.conf /etc/systemd/zram-generator.conf.off

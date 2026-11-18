@@ -72,7 +72,7 @@ ABL(잠금) → boot_a = kShimC 메뉴(iOS 테마, 볼륨 키로 선택, 8초 �
 | `dts/sm8650-lenovo-tb710fu-locked.dts` | 키보드 UART, L8B 가상 소비자, gpio81=`SW_DOCK` | ✔ |
 | `patches/0001-qcom-battmgr-…` | 배터리 전류 부호 반전(upower 충전 표시) | ✔ |
 | `patches/0003-remoteproc-qcom_q6v5-…` | ADSP handover 인터럽트 폭주(초당 5회) 차단 | ✔ handover 멈춤, 오류 로그 0줄 |
-| `config/tb710fu-locked.config` | TEO, f2fs, zswap, uinput 등 | uinput 내장 ✔, zswap 켜기는 미시험 |
+| `config/tb710fu-locked.config` | TEO, f2fs, zswap, uinput 등 | uinput 내장 ✔, zswap ✔ |
 
 꼭 유지할 옵션은 `kernel/required-options.txt`에 있습니다. CI와 기기 빌드가 이 목록을 검사합니다.
 
@@ -133,7 +133,7 @@ ADSP SSC → `hexagonrpcd-adsp-sensorspd`(registry 쓰기 패치) → libssc →
 | 데스크톱 | Plasma 세션 위에 Quickshell 기반 `macshell`(`~/.config/quickshell/macshell`, 자체 git) |
 | 로그인 | SDDM 자동 로그인(bmk, plasma), 테마 MacShell.Tahoe |
 | 입력기 | fcitx5 + hangul(왼쪽 Alt로 한영). 화면 키보드는 Plasma 키보드 |
-| 메모리 | zram 3.4 GB(zstd) + 스왑 파일 `/swap/swapfile`, `/swap/swapfile2`(각 4 GB), 모두 pri 100, swappiness 100, earlyoom |
+| 메모리 | zswap(zstd, 풀은 램의 최대 20%) + 8 GB 스왑 파일 `/swap/swapfile`, swappiness 100, earlyoom. zswap은 `/etc/tmpfiles.d/tb710fu-zswap.conf`로 켬. zram은 끔(`/etc/systemd/zram-generator.conf.off`) |
 | 게임 | FEX, Valve linuxarm64 Steam(`~/.local/bin/steam-arm64`), gamescope 3.17, `steam-deck-ui` 세션, `tb710fu-steam-touch` |
 | 저장소 사본 | `~/tb710fu-arch-linux-main`(worktree), `~/tb710fu-arch-linux`(오래된 클론, 참고만) |
 
@@ -177,7 +177,7 @@ echo +20 | sudo tee /sys/class/rtc/rtc0/wakealarm; systemctl suspend
 ## 8. 남은 일
 
 1. **새 커널 재시험:** 절전을 반복한 뒤 충전, 소리, 센서, 키보드가 유지되는지 확인합니다.
-2. **zswap으로 전환:** 새 커널에서 zram을 끄고 zswap을 켭니다([KERNEL-BUILD.md](KERNEL-BUILD.md)의 "zswap 켜기").
+2. **전력 후보(2026-11-18 측정):** 화면이 꺼진 유휴 상태는 약 0.7 W입니다. 센서 스트림을 멈추면 약 0.1 W, Brave를 멈추면 약 0.06 W가 줄었습니다. 배터리 자동 절전은 지금 30분입니다.
 3. **덮개를 열 때 깨우기:** 키보드 UART나 gpio81을 깨우기 소스로 등록합니다.
 4. **유휴 전력:** plasmashell과 macshell의 깨움, 타이머를 줄입니다.
 5. **libssc:** `report_received` 크래시와 busy-wait를 지켜봅니다(`CPUQuota=3%`로 완화 중).
