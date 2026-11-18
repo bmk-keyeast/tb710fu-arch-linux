@@ -1,0 +1,926 @@
+From 23d07e488e482e492ae385c12c6c2c5f66e36a71 Mon Sep 17 00:00:00 2001
+From: YOUR NAME <you@example.com>
+Date: Wed, 18 Nov 2026 15:58:36 +0900
+Subject: [RFC PATCH 2/2] Input: add driver for the Lenovo TB710FU Keyboard
+ Pack
+
+The Keyboard Pack is a detachable keyboard with a touchpad for the Lenovo
+TB710FU tablet. It sends scrambled reports over a 921600 baud UART on the
+pogo pins. Add a serdev driver that exposes the keyboard, the touchpad
+and the fold state as input devices.
+
+The pogo pins are powered only while a keyboard is attached, and the
+input devices exist only during that time. Plug detection is a GPIO that
+the board describes as a gpio-keys SW_DOCK switch, which the driver
+follows with an input handler.
+
+The protocol and the scrambling table were obtained by disassembling the
+vendor kernel module (lenovo_keyboard.ko) and observing the UART traffic.
+
+This driver was written with an AI coding assistant (Claude Opus 5.5)
+working from the submitter's hardware testing, and reviewed by the
+submitter.
+---
+ MAINTAINERS                                   |   7 +
+ drivers/input/keyboard/Kconfig                |  10 +
+ drivers/input/keyboard/Makefile               |   1 +
+ .../input/keyboard/lenovo-tb710fu-kbpack.c    | 836 ++++++++++++++++++
+ 4 files changed, 854 insertions(+)
+ create mode 100644 drivers/input/keyboard/lenovo-tb710fu-kbpack.c
+
+diff --git a/MAINTAINERS b/MAINTAINERS
+index d73899016..eea4bcf11 100644
+--- a/MAINTAINERS
++++ b/MAINTAINERS
+@@ -15171,6 +15171,13 @@ F:	Documentation/wmi/devices/lenovo-wmi-gamezone.rst
+ F:	Documentation/wmi/devices/lenovo-wmi-other.rst
+ F:	drivers/platform/x86/lenovo/*
+ 
++LENOVO TB710FU KEYBOARD PACK DRIVER
++M:	YOUR NAME <you@example.com>
++L:	linux-input@vger.kernel.org
++S:	Maintained
++F:	Documentation/devicetree/bindings/input/lenovo,tb710fu-keyboard-pack.yaml
++F:	drivers/input/keyboard/lenovo-tb710fu-kbpack.c
++
+ LENOVO WMI HOTKEY UTILITIES DRIVER
+ M:	Jackie Dong <xy-jackie@139.com>
+ L:	platform-driver-x86@vger.kernel.org
+diff --git a/drivers/input/keyboard/Kconfig b/drivers/input/keyboard/Kconfig
+index d8c64f333..2bfa0a1ca 100644
+--- a/drivers/input/keyboard/Kconfig
++++ b/drivers/input/keyboard/Kconfig
+@@ -316,6 +316,16 @@ config KEYBOARD_HP7XX
+ 	  To compile this driver as a module, choose M here: the
+ 	  module will be called jornada720_kbd.
+ 
++config KEYBOARD_LENOVO_TB710FU
++	tristate "Lenovo TB710FU Keyboard Pack"
++	depends on SERIAL_DEV_BUS
++	help
++	  Say Y here to enable the detachable Keyboard Pack of the Lenovo
++	  TB710FU tablet (Xiaoxin Pad Pro GT), including its touchpad.
++
++	  To compile this driver as a module, choose M here: the
++	  module will be called lenovo-tb710fu-kbpack.
++
+ config KEYBOARD_LM8323
+ 	tristate "LM8323 keypad chip"
+ 	depends on I2C
+diff --git a/drivers/input/keyboard/Makefile b/drivers/input/keyboard/Makefile
+index 60bb7baf8..a88faace9 100644
+--- a/drivers/input/keyboard/Makefile
++++ b/drivers/input/keyboard/Makefile
+@@ -34,6 +34,7 @@ obj-$(CONFIG_KEYBOARD_IMX_SC_KEY)	+= imx_sc_key.o
+ obj-$(CONFIG_KEYBOARD_IMX_BBM_SCMI)	+= imx-sm-bbm-key.o
+ obj-$(CONFIG_KEYBOARD_HP6XX)		+= jornada680_kbd.o
+ obj-$(CONFIG_KEYBOARD_HP7XX)		+= jornada720_kbd.o
++obj-$(CONFIG_KEYBOARD_LENOVO_TB710FU)	+= lenovo-tb710fu-kbpack.o
+ obj-$(CONFIG_KEYBOARD_LKKBD)		+= lkkbd.o
+ obj-$(CONFIG_KEYBOARD_LM8323)		+= lm8323.o
+ obj-$(CONFIG_KEYBOARD_LM8333)		+= lm8333.o
+diff --git a/drivers/input/keyboard/lenovo-tb710fu-kbpack.c b/drivers/input/keyboard/lenovo-tb710fu-kbpack.c
+new file mode 100644
+index 000000000..199fda8b2
+--- /dev/null
++++ b/drivers/input/keyboard/lenovo-tb710fu-kbpack.c
+@@ -0,0 +1,836 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Lenovo Keyboard Pack for the TB710FU tablet
++ *
++ * The keyboard, its touchpad and the fold state share a 921600 baud UART on
++ * the pogo pins. The host transmit line goes through a buffer with its own
++ * enable GPIO.
++ *
++ * Frames are delimited by 0x7e, with 0x7d escaping:
++ *
++ *   keyboard to host:      7e ff esc(seed data[0..n-1] sum) 7e
++ *   host to keyboard:   7e 7e ff esc(seed data[0..n-1] sum) 7e
++ *
++ * The sum is the low byte of the sum of the escaped bytes of seed and data.
++ * Each data byte is XORed with kbp_key[(seed + index) & 0x3f].
++ *
++ * Plug detection is a GPIO that the board describes as a gpio-keys SW_DOCK
++ * switch. This driver follows that switch with an input handler, so userspace
++ * keeps seeing it.
++ *
++ * Copyright (C) 2026 YOUR NAME <you@example.com>
++ */
++
++#include <linux/delay.h>
++#include <linux/gpio/consumer.h>
++#include <linux/input.h>
++#include <linux/input/mt.h>
++#include <linux/mod_devicetable.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/random.h>
++#include <linux/regulator/consumer.h>
++#include <linux/serdev.h>
++#include <linux/slab.h>
++#include <linux/spinlock.h>
++#include <linux/unaligned.h>
++#include <linux/workqueue.h>
++
++#define KBP_BAUD	921600
++#define KBP_VDD_UV	3296000
++#define KBP_RX_MAX	512
++#define KBP_DOCK_MS	1000	/* SW_DOCK must be stable for this long */
++#define KBP_VDD_MS	50	/* delay from VDD on to opening the UART */
++
++#define KBP_VENDOR	0x17ef	/* Lenovo */
++#define KBP_PRODUCT	0x6271
++
++#define KBP_TP_X	3199
++#define KBP_TP_Y	1999
++#define KBP_TP_SLOTS	4
++#define KBP_TP_RES	28	/* units/mm, estimated from the pad size */
++
++/* Report types, keyboard to host */
++#define KBP_RPT_KEYBOARD	0x11
++#define KBP_RPT_CONSUMER	0x12
++#define KBP_RPT_TOUCHPAD	0x13
++#define KBP_RPT_FOLD		0x15
++#define KBP_RPT_HELLO		0x16
++
++#define KBP_KEY_UNMAPPED	0xf0
++
++static const u8 kbp_key[64] = {
++	0xb8, 0x02, 0xd9, 0x57, 0xc6, 0x48, 0xc2, 0x13, 0xd7, 0xa6, 0x30, 0xbf,
++	0x40, 0xd3, 0x07, 0xce, 0xc3, 0xab, 0xfa, 0x51, 0x62, 0x18, 0xbd, 0x84,
++	0x7d, 0xca, 0xe0, 0xcf, 0xf2, 0xac, 0xbc, 0x12, 0xf5, 0x14, 0xd0, 0x72,
++	0xdc, 0x1a, 0x50, 0x00, 0x00, 0x32, 0xd1, 0x7b, 0x33, 0xb6, 0x10, 0xdd,
++	0x6a, 0x21, 0xeb, 0x7e, 0x52, 0x5b, 0x3d, 0x9f, 0x85, 0xcb, 0x1f, 0x66,
++	0x73, 0x96, 0xa1, 0x60,
++};
++
++/* HID keyboard usage to Linux key code, as in hid-input.c */
++static const u8 kbp_hid[256] = {
++	0x00, 0x00, 0x00, 0x00, 0x1e, 0x30, 0x2e, 0x20, 0x12, 0x21, 0x22, 0x23,
++	0x17, 0x24, 0x25, 0x26, 0x32, 0x31, 0x18, 0x19, 0x10, 0x13, 0x1f, 0x14,
++	0x16, 0x2f, 0x11, 0x2d, 0x15, 0x2c, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
++	0x08, 0x09, 0x0a, 0x0b, 0x1c, 0x01, 0x0e, 0x0f, 0x39, 0x0c, 0x0d, 0x1a,
++	0x1b, 0x2b, 0x2b, 0x27, 0x28, 0x29, 0x33, 0x34, 0x35, 0x3a, 0x3b, 0x3c,
++	0x3d, 0x3e, 0x3f, 0x40, 0x41, 0x42, 0x43, 0x44, 0x57, 0x58, 0x63, 0x46,
++	0x77, 0x6e, 0x66, 0x68, 0x6f, 0x6b, 0x6d, 0x6a, 0x69, 0x6c, 0x67, 0x45,
++	0x62, 0x37, 0x4a, 0x4e, 0x60, 0x4f, 0x50, 0x51, 0x4b, 0x4c, 0x4d, 0x47,
++	0x48, 0x49, 0x52, 0x53, 0x56, 0x7f, 0x74, 0x75, 0xb7, 0xb8, 0xb9, 0xba,
++	0xbb, 0xbc, 0xbd, 0xbe, 0xbf, 0xc0, 0xc1, 0xc2, 0x86, 0x8a, 0x82, 0x84,
++	0x80, 0x81, 0x83, 0x89, 0x85, 0x87, 0x88, 0x71, 0x73, 0x72, 0xf0, 0xf0,
++	0xf0, 0x79, 0xf0, 0x59, 0x5d, 0x7c, 0x5c, 0x5e, 0x5f, 0xf0, 0xf0, 0xf0,
++	0x7a, 0x7b, 0x5a, 0x5b, 0x55, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0,
++	0x6f, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0,
++	0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0,
++	0xf0, 0xf0, 0xb3, 0xb4, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0,
++	0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0,
++	0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0,
++	0x6f, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0x1d, 0x2a, 0x38, 0x7d,
++	0x61, 0x36, 0x64, 0x7e, 0xa4, 0xa6, 0xa5, 0xa3, 0xa1, 0x73, 0x72, 0x71,
++	0x96, 0x9e, 0x9f, 0x80, 0x88, 0xb1, 0xb2, 0xb0, 0x8e, 0x98, 0xad, 0x8c,
++	0xf0, 0xf0, 0xf0, 0xf0,
++};
++
++/* Modifier byte, bit 0 to bit 7 */
++static const u16 kbp_mods[8] = {
++	KEY_LEFTCTRL, KEY_LEFTSHIFT, KEY_LEFTALT, KEY_LEFTMETA,
++	KEY_RIGHTCTRL, KEY_RIGHTSHIFT, KEY_RIGHTALT, KEY_RIGHTMETA,
++};
++
++struct kbp_consumer_map {
++	u16 usage;
++	u16 code;
++};
++
++/* Top row keys, sent as HID consumer usages */
++static const struct kbp_consumer_map kbp_consumer[] = {
++	{ 0x0e2, KEY_MUTE },
++	{ 0x0ea, KEY_VOLUMEDOWN },
++	{ 0x0e9, KEY_VOLUMEUP },
++	{ 0x070, KEY_BRIGHTNESSDOWN },
++	{ 0x06f, KEY_BRIGHTNESSUP },
++	{ 0x391, KEY_MICMUTE },
++	{ 0x394, KEY_FULL_SCREEN },
++	{ 0x395, KEY_PROG2 },
++	{ 0x398, KEY_ASSISTANT },
++};
++
++enum {
++	KBP_SEND_HELLO,
++	KBP_SEND_CAPS,
++	KBP_CAPS_ON,
++};
++
++struct kbpack {
++	struct serdev_device *serdev;
++	struct regulator *vdd;
++	struct gpio_desc *tx_en;
++	struct input_handler dock_handler;
++	struct work_struct work;
++	struct delayed_work dock_work;
++	struct mutex lock;		/* serializes attach, detach and sends */
++	unsigned long flags;
++	bool want_docked;		/* last SW_DOCK value */
++	bool docked;			/* powered, UART open, inputs registered */
++	bool vdd_on;
++	bool open;
++
++	spinlock_t in_lock;		/* receive path against detach */
++	bool live;
++	struct input_dev *kbd;
++	struct input_dev *tp;
++	struct input_dev *sw;
++	u8 prev[8];			/* last report: modifiers, reserved, keys */
++	u16 cons;			/* consumer key held */
++
++	u8 rx[KBP_RX_MAX];
++	u8 plain[KBP_RX_MAX];
++	int rx_len;			/* above KBP_RX_MAX: skip to next 0x7e */
++};
++
++/*
++ * Decode the bytes between two 0x7e delimiters into @out, which must hold @len
++ * bytes. Returns the payload length, or -1 if this is not a valid frame.
++ */
++static int kbp_unframe(const u8 *c, int len, u8 *out)
++{
++	unsigned int wire = 0, prev_wire = 0, last = 0;
++	int i = 1, ntok = 0, seed = 0;
++
++	if (len < 4 || c[0] != 0xff)
++		return -1;
++
++	while (i < len) {
++		int v, w;
++
++		if (c[i] == 0x7d) {
++			int n = i + 1 < len ? c[i + 1] : 0;
++
++			v = n ^ 0x20;
++			w = 0x7d + n;
++			i += 2;
++		} else {
++			v = c[i];
++			w = c[i];
++			i++;
++		}
++
++		/* Every token but the last is summed, the last one is the sum */
++		prev_wire = wire;
++		wire += w;
++		if (ntok == 0)
++			seed = v;
++		else
++			out[ntok - 1] = v;
++		last = v;
++		ntok++;
++	}
++
++	if (ntok < 2 || (prev_wire & 0xff) != last)
++		return -1;
++
++	for (i = 0; i < ntok - 2; i++)
++		out[i] ^= kbp_key[(seed + i) & 0x3f];
++
++	return ntok - 2;
++}
++
++static int kbp_esc(u8 *o, u8 b)
++{
++	if (b == 0x7d || b == 0x7e) {
++		o[0] = 0x7d;
++		o[1] = b ^ 0x20;
++		return 2;
++	}
++
++	o[0] = b;
++	return 1;
++}
++
++/* Encode a host to keyboard frame. @out needs 2 * @n + 8 bytes. */
++static int kbp_frame(const u8 *plain, int n, u8 seed, u8 *out)
++{
++	unsigned int sum = 0;
++	int o = 3, i, k;
++
++	out[0] = 0x7e;
++	out[1] = 0x7e;
++	out[2] = 0xff;
++
++	for (i = -1; i < n; i++) {
++		u8 b = i < 0 ? seed : plain[i] ^ kbp_key[(seed + i) & 0x3f];
++
++		k = kbp_esc(out + o, b);
++		while (k--)
++			sum += out[o++];
++	}
++
++	o += kbp_esc(out + o, sum & 0xff);
++	out[o++] = 0x7e;
++
++	return o;
++}
++
++static bool kbp_has(const u8 *keys, u8 key)
++{
++	return memchr(keys, key, 6);
++}
++
++static bool kbp_mapped(u8 usage)
++{
++	return kbp_hid[usage] && kbp_hid[usage] != KBP_KEY_UNMAPPED;
++}
++
++static void kbp_keyboard(struct kbpack *kb, const u8 *p)
++{
++	const u8 *old = kb->prev + 2, *now = p + 4;
++	bool changed = false;
++	int i;
++
++	for (i = 0; i < 6; i++) {
++		if (old[i] && !kbp_has(now, old[i]) && kbp_mapped(old[i])) {
++			input_report_key(kb->kbd, kbp_hid[old[i]], 0);
++			changed = true;
++		}
++	}
++
++	for (i = 0; i < 8; i++) {
++		if ((kb->prev[0] & ~p[2]) & BIT(i)) {
++			input_report_key(kb->kbd, kbp_mods[i], 0);
++			changed = true;
++		}
++	}
++
++	for (i = 0; i < 8; i++) {
++		if ((p[2] & ~kb->prev[0]) & BIT(i)) {
++			input_report_key(kb->kbd, kbp_mods[i], 1);
++			changed = true;
++		}
++	}
++
++	for (i = 0; i < 6; i++) {
++		if (now[i] && !kbp_has(old, now[i]) && kbp_mapped(now[i])) {
++			input_report_key(kb->kbd, kbp_hid[now[i]], 1);
++			changed = true;
++		}
++	}
++
++	if (changed)
++		input_sync(kb->kbd);
++
++	kb->prev[0] = p[2];
++	memcpy(kb->prev + 2, now, 6);
++}
++
++static void kbp_consumer_key(struct kbpack *kb, u16 usage)
++{
++	unsigned int i;
++	u16 code = 0;
++
++	for (i = 0; i < ARRAY_SIZE(kbp_consumer); i++)
++		if (kbp_consumer[i].usage == usage)
++			code = kbp_consumer[i].code;
++
++	if (usage && !code)
++		dev_dbg(&kb->serdev->dev, "unmapped consumer usage %#x\n", usage);
++
++	if (code == kb->cons)
++		return;
++
++	if (kb->cons)
++		input_report_key(kb->kbd, kb->cons, 0);
++	if (code)
++		input_report_key(kb->kbd, code, 1);
++	input_sync(kb->kbd);
++	kb->cons = code;
++}
++
++/*
++ * Report: 13 len buttons { flags x:le16 y:le16 }...
++ * flags >> 4 is the slot, bit 0 is set while the finger is down.
++ */
++static void kbp_touch(struct kbpack *kb, const u8 *p, int n)
++{
++	int i, cnt = (min_t(int, p[1], n - 2) - 1) / 5;
++
++	for (i = 0; i < cnt; i++) {
++		const u8 *e = p + 3 + 5 * i;
++		int slot = e[0] >> 4;
++
++		/* Lifted fingers are released by input_mt_sync_frame() */
++		if (slot >= KBP_TP_SLOTS || !(e[0] & 1))
++			continue;
++
++		input_mt_slot(kb->tp, slot);
++		input_mt_report_slot_state(kb->tp, MT_TOOL_FINGER, true);
++		input_report_abs(kb->tp, ABS_MT_POSITION_X,
++				 get_unaligned_le16(e + 1));
++		input_report_abs(kb->tp, ABS_MT_POSITION_Y,
++				 get_unaligned_le16(e + 3));
++	}
++
++	input_mt_sync_frame(kb->tp);
++	input_report_key(kb->tp, BTN_LEFT, p[2] & 1);
++	input_sync(kb->tp);
++}
++
++static void kbp_packet(struct kbpack *kb, const u8 *p, int n)
++{
++	bool active;
++
++	if (n < 2)
++		return;
++
++	/*
++	 * The keyboard sends the "unfolded" report only once, so it can be lost
++	 * while the tablet sleeps. Key presses and finger touches only arrive
++	 * while unfolded: use them to leave tablet mode.
++	 */
++	active = (p[0] == KBP_RPT_KEYBOARD && n >= 10 &&
++		  (p[2] || memchr_inv(p + 4, 0, 6))) ||
++		 (p[0] == KBP_RPT_TOUCHPAD && n >= 8 && (p[3] & 1));
++	if (active && test_bit(SW_TABLET_MODE, kb->sw->sw)) {
++		input_report_switch(kb->sw, SW_TABLET_MODE, 0);
++		input_sync(kb->sw);
++	}
++
++	switch (p[0]) {
++	case KBP_RPT_KEYBOARD:
++		if (n >= 10)
++			kbp_keyboard(kb, p);
++		break;
++	case KBP_RPT_CONSUMER:
++		if (n >= 4)
++			kbp_consumer_key(kb, p[2] | p[3] << 8);
++		break;
++	case KBP_RPT_TOUCHPAD:
++		if (n >= 3)
++			kbp_touch(kb, p, n);
++		break;
++	case KBP_RPT_FOLD:
++		/* 15 03 02 01 vv: vv is 0 when folded behind the tablet */
++		if (n >= 5) {
++			input_report_switch(kb->sw, SW_TABLET_MODE, p[4] == 0);
++			input_sync(kb->sw);
++		}
++		break;
++	case KBP_RPT_HELLO:
++		if (p[1] == 3) {
++			set_bit(KBP_SEND_HELLO, &kb->flags);
++			schedule_work(&kb->work);
++		}
++		break;
++	}
++}
++
++static size_t kbp_receive(struct serdev_device *serdev, const u8 *buf,
++			  size_t count)
++{
++	struct kbpack *kb = serdev_device_get_drvdata(serdev);
++	unsigned long irqf;
++	size_t i;
++	int n;
++
++	for (i = 0; i < count; i++) {
++		if (buf[i] != 0x7e) {
++			if (kb->rx_len < KBP_RX_MAX)
++				kb->rx[kb->rx_len] = buf[i];
++			if (kb->rx_len <= KBP_RX_MAX)
++				kb->rx_len++;
++			continue;
++		}
++
++		n = -1;
++		if (kb->rx_len <= KBP_RX_MAX)
++			n = kbp_unframe(kb->rx, kb->rx_len, kb->plain);
++		kb->rx_len = 0;
++		if (n <= 0)
++			continue;
++
++		spin_lock_irqsave(&kb->in_lock, irqf);
++		if (kb->live)
++			kbp_packet(kb, kb->plain, n);
++		spin_unlock_irqrestore(&kb->in_lock, irqf);
++	}
++
++	return count;
++}
++
++static const struct serdev_device_ops kbp_serdev_ops = {
++	.receive_buf = kbp_receive,
++	.write_wakeup = serdev_device_write_wakeup,
++};
++
++static void kbp_send(struct kbpack *kb, const u8 *plain, int n)
++{
++	u8 f[2 * 16 + 8];
++	int len = kbp_frame(plain, n, get_random_u8() & 0x7f, f);
++
++	gpiod_set_value_cansleep(kb->tx_en, 1);
++	serdev_device_write_buf(kb->serdev, f, len);
++	serdev_device_wait_until_sent(kb->serdev, msecs_to_jiffies(50));
++	gpiod_set_value_cansleep(kb->tx_en, 0);
++}
++
++static int kbp_kbd_event(struct input_dev *dev, unsigned int type,
++			 unsigned int code, int value)
++{
++	struct kbpack *kb = input_get_drvdata(dev);
++
++	if (type != EV_LED || code != LED_CAPSL)
++		return -EINVAL;
++
++	/* Called in atomic context, sending sleeps */
++	assign_bit(KBP_CAPS_ON, &kb->flags, value);
++	set_bit(KBP_SEND_CAPS, &kb->flags);
++	schedule_work(&kb->work);
++
++	return 0;
++}
++
++static struct input_dev *kbp_input(struct kbpack *kb, const char *name)
++{
++	struct input_dev *in = input_allocate_device();
++
++	if (!in)
++		return NULL;
++
++	in->name = name;
++	in->phys = "tb710fu-kbpack/input0";
++	in->id.bustype = BUS_HOST;
++	in->id.vendor = KBP_VENDOR;
++	in->id.product = KBP_PRODUCT;
++	in->dev.parent = &kb->serdev->dev;
++	input_set_drvdata(in, kb);
++
++	return in;
++}
++
++static int kbp_inputs(struct kbpack *kb)
++{
++	struct input_dev *kbd, *tp, *sw;
++	int i, err = -ENOMEM;
++
++	kbd = kbp_input(kb, "Lenovo Keyboard Pack Keyboard");
++	tp = kbp_input(kb, "Lenovo Keyboard Pack Touchpad");
++	sw = kbp_input(kb, "Lenovo Keyboard Pack Tablet Mode");
++	if (!kbd || !tp || !sw)
++		goto free;
++
++	for (i = 0; i < 256; i++)
++		if (kbp_mapped(i))
++			input_set_capability(kbd, EV_KEY, kbp_hid[i]);
++	for (i = 0; i < 8; i++)
++		input_set_capability(kbd, EV_KEY, kbp_mods[i]);
++	for (i = 0; i < ARRAY_SIZE(kbp_consumer); i++)
++		input_set_capability(kbd, EV_KEY, kbp_consumer[i].code);
++	input_set_capability(kbd, EV_LED, LED_CAPSL);
++	kbd->event = kbp_kbd_event;
++
++	input_set_capability(tp, EV_KEY, BTN_LEFT);
++	input_set_abs_params(tp, ABS_MT_POSITION_X, 0, KBP_TP_X, 0, 0);
++	input_set_abs_params(tp, ABS_MT_POSITION_Y, 0, KBP_TP_Y, 0, 0);
++	input_abs_set_res(tp, ABS_MT_POSITION_X, KBP_TP_RES);
++	input_abs_set_res(tp, ABS_MT_POSITION_Y, KBP_TP_RES);
++	__set_bit(INPUT_PROP_BUTTONPAD, tp->propbit);
++	err = input_mt_init_slots(tp, KBP_TP_SLOTS,
++				  INPUT_MT_POINTER | INPUT_MT_DROP_UNUSED);
++	if (err)
++		goto free;
++
++	input_set_capability(sw, EV_SW, SW_TABLET_MODE);
++
++	err = input_register_device(kbd);
++	if (err)
++		goto free;
++
++	err = input_register_device(tp);
++	if (err) {
++		input_unregister_device(kbd);
++		kbd = NULL;
++		goto free;
++	}
++
++	err = input_register_device(sw);
++	if (err) {
++		input_unregister_device(kbd);
++		input_unregister_device(tp);
++		kbd = NULL;
++		tp = NULL;
++		goto free;
++	}
++
++	kb->kbd = kbd;
++	kb->tp = tp;
++	kb->sw = sw;
++
++	return 0;
++
++free:
++	input_free_device(kbd);
++	input_free_device(tp);
++	input_free_device(sw);
++
++	return err;
++}
++
++static int kbp_open(struct kbpack *kb)
++{
++	struct serdev_device *serdev = kb->serdev;
++	int err;
++
++	kb->rx_len = 0;
++
++	err = serdev_device_open(serdev);
++	if (err)
++		return err;
++
++	serdev_device_set_baudrate(serdev, KBP_BAUD);
++	serdev_device_set_flow_control(serdev, false);
++
++	err = serdev_device_set_parity(serdev, SERDEV_PARITY_NONE);
++	if (err) {
++		serdev_device_close(serdev);
++		return err;
++	}
++
++	kb->open = true;
++
++	return 0;
++}
++
++static void kbp_close(struct kbpack *kb)
++{
++	if (kb->open) {
++		serdev_device_close(kb->serdev);
++		kb->open = false;
++	}
++}
++
++static void kbp_vdd_off(struct kbpack *kb)
++{
++	if (kb->vdd_on && !regulator_disable(kb->vdd))
++		kb->vdd_on = false;
++}
++
++static void kbp_attach(struct kbpack *kb)
++{
++	struct device *dev = &kb->serdev->dev;
++	unsigned long irqf;
++	int err;
++
++	if (!kb->vdd_on) {
++		err = regulator_set_voltage(kb->vdd, KBP_VDD_UV, KBP_VDD_UV);
++		if (!err)
++			err = regulator_enable(kb->vdd);
++		if (err) {
++			dev_err(dev, "failed to enable VDD: %d\n", err);
++			return;
++		}
++		kb->vdd_on = true;
++		msleep(KBP_VDD_MS);
++	}
++
++	/*
++	 * The UART stays closed while VDD is off: an unpowered keyboard can
++	 * hold RX low, which the UART would see as an endless break.
++	 */
++	if (!kb->open) {
++		err = kbp_open(kb);
++		if (err) {
++			dev_err(dev, "failed to open UART: %d\n", err);
++			kbp_vdd_off(kb);
++			return;
++		}
++	}
++
++	err = kbp_inputs(kb);
++	if (err) {
++		dev_err(dev, "failed to register input devices: %d\n", err);
++		kbp_close(kb);
++		kbp_vdd_off(kb);
++		return;
++	}
++
++	memset(kb->prev, 0, sizeof(kb->prev));
++	kb->cons = 0;
++
++	spin_lock_irqsave(&kb->in_lock, irqf);
++	kb->live = true;
++	spin_unlock_irqrestore(&kb->in_lock, irqf);
++
++	kb->docked = true;
++}
++
++static void kbp_detach(struct kbpack *kb)
++{
++	unsigned long irqf;
++
++	spin_lock_irqsave(&kb->in_lock, irqf);
++	kb->live = false;
++	spin_unlock_irqrestore(&kb->in_lock, irqf);
++
++	/* Close before VDD goes off, see kbp_attach() */
++	kbp_close(kb);
++
++	if (kb->kbd) {
++		input_unregister_device(kb->kbd);
++		input_unregister_device(kb->tp);
++		input_unregister_device(kb->sw);
++		kb->kbd = NULL;
++		kb->tp = NULL;
++		kb->sw = NULL;
++	}
++
++	kbp_vdd_off(kb);
++	kb->docked = false;
++}
++
++static void kbp_dock_work(struct work_struct *work)
++{
++	struct kbpack *kb = container_of(to_delayed_work(work), struct kbpack,
++					 dock_work);
++
++	guard(mutex)(&kb->lock);
++
++	if (READ_ONCE(kb->want_docked) == kb->docked)
++		return;
++
++	if (kb->docked)
++		kbp_detach(kb);
++	else
++		kbp_attach(kb);
++}
++
++static void kbp_work(struct work_struct *work)
++{
++	static const u8 hello[] = { 0x6a, 0x04, 0x33, 0x02, 0x00, 0x00 };
++	struct kbpack *kb = container_of(work, struct kbpack, work);
++
++	guard(mutex)(&kb->lock);
++
++	if (kb->docked && test_and_clear_bit(KBP_SEND_HELLO, &kb->flags))
++		kbp_send(kb, hello, sizeof(hello));
++
++	if (kb->docked && test_and_clear_bit(KBP_SEND_CAPS, &kb->flags)) {
++		u8 led[] = { 0x6a, 0x03, 0x27, 0x01,
++			     test_bit(KBP_CAPS_ON, &kb->flags) };
++
++		kbp_send(kb, led, sizeof(led));
++	}
++}
++
++static void kbp_dock_event(struct input_handle *handle, unsigned int type,
++			   unsigned int code, int value)
++{
++	struct kbpack *kb = container_of(handle->handler, struct kbpack,
++					 dock_handler);
++
++	if (type != EV_SW || code != SW_DOCK)
++		return;
++
++	/*
++	 * Folding the keyboard behind the tablet can drop the detect line for
++	 * about 0.4 s. Every change restarts the wait, so such a bounce does
++	 * not power off a keyboard that is still on the pins.
++	 */
++	WRITE_ONCE(kb->want_docked, !!value);
++	mod_delayed_work(system_dfl_wq, &kb->dock_work,
++			 msecs_to_jiffies(KBP_DOCK_MS));
++}
++
++static int kbp_dock_connect(struct input_handler *handler, struct input_dev *dev,
++			    const struct input_device_id *id)
++{
++	struct kbpack *kb = container_of(handler, struct kbpack, dock_handler);
++	struct input_handle *handle;
++	int err;
++
++	handle = kzalloc_obj(*handle);
++	if (!handle)
++		return -ENOMEM;
++
++	handle->dev = dev;
++	handle->handler = handler;
++	handle->name = "tb710fu-kbpack";
++
++	err = input_register_handle(handle);
++	if (err)
++		goto err_free;
++
++	err = input_open_device(handle);
++	if (err)
++		goto err_unregister;
++
++	WRITE_ONCE(kb->want_docked, test_bit(SW_DOCK, dev->sw));
++	mod_delayed_work(system_dfl_wq, &kb->dock_work, 0);
++
++	return 0;
++
++err_unregister:
++	input_unregister_handle(handle);
++err_free:
++	kfree(handle);
++
++	return err;
++}
++
++static void kbp_dock_disconnect(struct input_handle *handle)
++{
++	input_close_device(handle);
++	input_unregister_handle(handle);
++	kfree(handle);
++}
++
++static const struct input_device_id kbp_dock_ids[] = {
++	{
++		.flags = INPUT_DEVICE_ID_MATCH_EVBIT | INPUT_DEVICE_ID_MATCH_SWBIT,
++		.evbit = { BIT_MASK(EV_SW) },
++		.swbit = { [BIT_WORD(SW_DOCK)] = BIT_MASK(SW_DOCK) },
++	},
++	{ }
++};
++
++static int kbp_probe(struct serdev_device *serdev)
++{
++	struct device *dev = &serdev->dev;
++	struct kbpack *kb;
++	int err;
++
++	kb = devm_kzalloc(dev, sizeof(*kb), GFP_KERNEL);
++	if (!kb)
++		return -ENOMEM;
++
++	kb->serdev = serdev;
++	spin_lock_init(&kb->in_lock);
++	INIT_WORK(&kb->work, kbp_work);
++	INIT_DELAYED_WORK(&kb->dock_work, kbp_dock_work);
++	serdev_device_set_drvdata(serdev, kb);
++
++	err = devm_mutex_init(dev, &kb->lock);
++	if (err)
++		return err;
++
++	kb->vdd = devm_regulator_get(dev, "vdd");
++	if (IS_ERR(kb->vdd))
++		return dev_err_probe(dev, PTR_ERR(kb->vdd), "failed to get VDD\n");
++
++	kb->tx_en = devm_gpiod_get(dev, "tx-enable", GPIOD_OUT_LOW);
++	if (IS_ERR(kb->tx_en))
++		return dev_err_probe(dev, PTR_ERR(kb->tx_en),
++				     "failed to get TX enable GPIO\n");
++
++	serdev_device_set_client_ops(serdev, &kbp_serdev_ops);
++
++	kb->dock_handler.name = "tb710fu-kbpack";
++	kb->dock_handler.event = kbp_dock_event;
++	kb->dock_handler.connect = kbp_dock_connect;
++	kb->dock_handler.disconnect = kbp_dock_disconnect;
++	kb->dock_handler.id_table = kbp_dock_ids;
++
++	err = input_register_handler(&kb->dock_handler);
++	if (err)
++		return dev_err_probe(dev, err, "failed to follow SW_DOCK\n");
++
++	return 0;
++}
++
++static void kbp_remove(struct serdev_device *serdev)
++{
++	struct kbpack *kb = serdev_device_get_drvdata(serdev);
++
++	input_unregister_handler(&kb->dock_handler);
++	cancel_delayed_work_sync(&kb->dock_work);
++
++	scoped_guard(mutex, &kb->lock) {
++		if (kb->docked)
++			kbp_detach(kb);
++		kbp_close(kb);
++		kbp_vdd_off(kb);
++	}
++
++	cancel_work_sync(&kb->work);
++}
++
++static const struct of_device_id kbp_of_match[] = {
++	{ .compatible = "lenovo,tb710fu-keyboard-pack" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, kbp_of_match);
++
++static struct serdev_device_driver kbp_driver = {
++	.probe = kbp_probe,
++	.remove = kbp_remove,
++	.driver = {
++		.name = "tb710fu-kbpack",
++		.of_match_table = kbp_of_match,
++	},
++};
++module_serdev_device_driver(kbp_driver);
++
++MODULE_AUTHOR("YOUR NAME <you@example.com>");
++MODULE_DESCRIPTION("Lenovo TB710FU Keyboard Pack driver");
++MODULE_LICENSE("GPL");
+-- 
+2.43.0
+

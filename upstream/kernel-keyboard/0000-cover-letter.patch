@@ -1,0 +1,76 @@
+From 23d07e488e482e492ae385c12c6c2c5f66e36a71 Mon Sep 17 00:00:00 2001
+From: YOUR NAME <you@example.com>
+Date: Wed, 18 Nov 2026 15:58:36 +0900
+Subject: [RFC PATCH 0/2] Input: add Lenovo TB710FU Keyboard Pack driver
+
+This series adds a driver for the detachable Keyboard Pack of the Lenovo
+TB710FU tablet (Xiaoxin Pad Pro GT, SM8650). The keyboard, its touchpad
+and the fold state share a 921600 baud UART on the pogo pins.
+
+The TB710FU board is not in mainline yet, so this series has no in-tree
+user. The board devicetree will be sent separately.
+
+I am sending this as an RFC because I would like your opinion on three
+design points:
+
+1. Plug detection. The detect line is a GPIO that the board describes as
+   a gpio-keys SW_DOCK switch, and the driver follows that switch with an
+   input handler. The alternative is a detect-gpios property, with the
+   driver owning the GPIO and reporting SW_DOCK itself. Which do you
+   prefer?
+
+2. Location. The reports look like HID reports after descrambling. Would
+   you prefer a HID transport driver over a plain input driver in
+   drivers/input/keyboard?
+
+3. Device lifetime. The input devices are registered when a keyboard is
+   attached and removed when it is detached, so that desktops can tell
+   whether a physical keyboard is present.
+
+The protocol and the scrambling table were obtained by disassembling the
+vendor kernel module (lenovo_keyboard.ko) and observing the UART traffic.
+No vendor source code is included.
+
+Known limitations:
+
+- The touchpad resolution is an estimate from the size of the pad.
+- The meaning of consumer usages 0x394 and 0x395 is not known. They are
+  mapped to KEY_FULL_SCREEN and KEY_PROG2.
+- The Caps Lock LED is dimmer than under the vendor firmware. The cause
+  is not known.
+
+Testing:
+
+- An earlier revision of this driver is in daily use on a TB710FU with a
+  7.2.6-based kernel: typing, touchpad, Caps Lock LED, attach and detach,
+  folding the keyboard back, and suspend to idle.
+- This revision was cleaned up for submission. It builds against v7.4-rc3
+  with W=1, and the binding passes dt_binding_check.
+- TODO(submitter): run this exact revision on the hardware and replace
+  this line with the result.
+
+Tool use, following Documentation/process/generated-content.rst: this
+series was written with an AI coding assistant (Claude Opus 5.5). The
+assistant wrote the driver, the binding and these changelogs, based on a
+long session in which the protocol was analysed and each revision was
+tested on the tablet. checkpatch.pl and dt_binding_check were used to
+check the result.
+
+YOUR NAME (2):
+  dt-bindings: input: Add Lenovo TB710FU Keyboard Pack
+  Input: add driver for the Lenovo TB710FU Keyboard Pack
+
+ .../input/lenovo,tb710fu-keyboard-pack.yaml   |  47 +
+ MAINTAINERS                                   |   7 +
+ drivers/input/keyboard/Kconfig                |  10 +
+ drivers/input/keyboard/Makefile               |   1 +
+ .../input/keyboard/lenovo-tb710fu-kbpack.c    | 836 ++++++++++++++++++
+ 5 files changed, 901 insertions(+)
+ create mode 100644 Documentation/devicetree/bindings/input/lenovo,tb710fu-keyboard-pack.yaml
+ create mode 100644 drivers/input/keyboard/lenovo-tb710fu-kbpack.c
+
+
+base-commit: 20eef29b7c8465ac98d7dd6d6f2ac07a8d8056ca
+-- 
+2.43.0
+

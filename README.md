@@ -8,6 +8,7 @@
 - **슬롯 b:** 검증된 `v4-e3-20261115` 이미지를 그대로 둡니다. SSD가 없으면 30초 뒤 슬롯 a로 돌아갑니다.
 - **에이전트는 먼저 읽으세요:** [docs/SYSTEM-STATE.md](docs/SYSTEM-STATE.md)에 현재 시스템 상태와 절대 규칙을 정리했습니다.
 - **커널 재컴파일과 재패키징:** [docs/KERNEL-BUILD.md](docs/KERNEL-BUILD.md). 태블릿 안에서 빌드하는 도구는 [build/device-kernel.sh](build/device-kernel.sh)입니다.
+- **업스트림 제출 자료:** [upstream/README.md](upstream/README.md)에 메인라인 현황, 패치, 제출 절차를 정리했습니다.
 - **인계 문서:** [docs/handoff-2026-11-16.md](docs/handoff-2026-11-16.md)에 지금까지 알아낸 사실과 남은 일을 모두 정리했습니다.
 
 ## 현재 상태 (2026-11-17, 기기 실측)
