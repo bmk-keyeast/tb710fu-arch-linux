@@ -30,6 +30,21 @@ STALE = 30        # s without a light reading: restart monitor-sensor
 lux = collections.deque(maxlen=600)  # (monotonic time, lux)
 
 
+def sleep_blocked():
+    """True while someone holds a logind block inhibitor on "sleep" (e.g. macshell's
+    battery-menu "sleep block"). systemctl run as root from a service ignores block
+    inhibitors, and --check-inhibitors=yes also refuses whenever bmk is logged in,
+    so check logind's BlockInhibited ourselves."""
+    try:
+        out = subprocess.run(
+            ["busctl", "get-property", "org.freedesktop.login1", "/org/freedesktop/login1",
+             "org.freedesktop.login1.Manager", "BlockInhibited"],
+            capture_output=True, text=True, timeout=3).stdout
+        return "sleep" in out.strip().split(" ", 1)[-1].strip('"').split(":")
+    except Exception:
+        return False
+
+
 def log(*a):
     print(*a, flush=True)
 
@@ -96,7 +111,9 @@ def run():
                     after = window(time.monotonic() - 1, time.monotonic())
                     b = statistics.median(before) if before else None
                     a = statistics.median(after) if after else None
-                    if closed(before, after):
+                    if closed(before, after) and sleep_blocked():
+                        log("cover closed (light %.0f -> %.0f lux) but sleep is inhibited: no suspend" % (b, a))
+                    elif closed(before, after):
                         log("cover closed (light %.0f -> %.0f lux): suspend" % (b, a))
                         subprocess.run(["systemctl", "suspend"])
                     else:

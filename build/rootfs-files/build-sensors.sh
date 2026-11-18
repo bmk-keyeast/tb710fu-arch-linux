@@ -58,14 +58,24 @@ RestartSec=5
 EOF
 # the sensor PD's persist/sensors/registry (registry/, sns_reg_version, parsed_file_list.csv)
 chown -R fastrpc:fastrpc /usr/share/qcom/sm8650/Lenovo/tb710fu/sensors/persist-registry
-# auto-rotate keeps the accelerometer streaming; across s2idle the ADSP would keep waking
-# (Armada's TB323FU measured ~36/s): stop the proxy before sleep, start it after
 install -Dm755 /dev/stdin /usr/lib/systemd/system-sleep/tb710fu-sensors <<'EOF'
 #!/bin/sh
+# TB710FU sleep hook (tb710fu-arch-linux build-sensors.sh).
+# Auto-rotate keeps the accelerometer streaming; across s2idle the ADSP would keep waking
+# (Armada's TB323FU measured ~36/s): stop iio-sensor-proxy before sleep, start it after.
+# hexagonrpcd-adsp-sensorspd has Conflicts=suspend.target, so it stops on sleep and nothing
+# starts it again otherwise.
+# - Starting them from "post" directly is rejected while suspend.target's job is still queued
+#   ("Transaction ... is destructive"), so defer past the resume.
+# - Start the proxy unconditionally: a "was it active" check raced with another hook stopping
+#   it first, and the proxy then stayed down until reboot (light None, no lid suspend, no
+#   rotation; 2026-11-17).
+# - systemd-sleep runs every executable in this directory, in parallel: never keep backups here.
 case "$1" in
 pre)	systemctl stop iio-sensor-proxy.service ;;
-# hexagonrpcd-adsp-sensorspd has Conflicts=suspend.target: nothing starts it again otherwise
-post)	systemctl start --no-block hexagonrpcd-adsp-sensorspd.service iio-sensor-proxy.service ;;
+post)	systemd-run --no-block --collect /bin/sh -c 'sleep 2
+		systemctl --no-block start hexagonrpcd-adsp-sensorspd.service
+		systemctl --no-block start iio-sensor-proxy.service' ;;
 esac
 exit 0
 EOF

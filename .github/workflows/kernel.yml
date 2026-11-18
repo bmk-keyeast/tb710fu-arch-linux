@@ -12,8 +12,8 @@ on:
       - .github/workflows/kernel.yml
 
 env:
-  # ArmadaOS-Freedom/armadaos-freedom main, 2026-11-14
-  ARMADA_SHA: b75a6d48e006782b886627dc2dee2b8691aa64f6
+  # ArmadaOS-Freedom/armadaos-freedom main, 2026-11-17 (build/device-kernel.sh reads this line)
+  ARMADA_SHA: 5c4454f23cd72b05267645da4459b7af70e24f03
 
 jobs:
   build:
@@ -48,6 +48,16 @@ jobs:
         run: |
           export CCACHE_DIR="$HOME/.ccache"
           WORK_DIR="$RUNNER_TEMP/kb" OUT_DIR="$RUNNER_TEMP/kout" bash scripts/build-kernel.sh
+
+      # what Steam/FEX/gamescope and the tablet's setup rely on: fail here, not on the device
+      - name: Check required kernel options
+        run: |
+          c=$(ls -d "$RUNNER_TEMP"/kb/linux-*/ | head -1).config
+          for o in NTSYNC=y ARM64_4K_PAGES=y BINFMT_MISC=m USER_NS=y FUSE_FS=m OVERLAY_FS=m EROFS_FS=m             SQUASHFS=y COMPAT=y UHID=y HIDRAW=y HID_STEAM=m JOYSTICK_XPAD=m HID_PLAYSTATION=m             HID_NINTENDO=m BT_HIDP=m UCLAMP_TASK=y SCHED_CLASS_EXT=y DEBUG_INFO_BTF=y             TRANSPARENT_HUGEPAGE_MADVISE=y LRU_GEN_ENABLED=y INPUT_UINPUT=y ZSWAP=y             ZSWAP_COMPRESSOR_DEFAULT_ZSTD=y CPU_IDLE_GOV_TEO=y REGULATOR_VIRTUAL_CONSUMER=y; do
+            grep -qx "CONFIG_$o" "$c" || { echo "missing CONFIG_$o: $(grep "CONFIG_${o%=*}[= ]" "$c")"; exit 1; }
+          done
+          ! grep -q '^CONFIG_ZSWAP_DEFAULT_ON=y' "$c"
+          cp "$c" kernel.config
 
       # out-of-tree like Armada's own aw882xx; loads only when the DT keyboard node is "okay"
       - name: Keyboard Pack kernel driver (kernel/tb710fu-kbpack)
@@ -95,4 +105,5 @@ jobs:
             kernel-*.tar.gz
             rootfs-extra.tar.gz
             kernel-tb710fu.sha256
+            kernel.config
           retention-days: 30

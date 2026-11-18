@@ -1,0 +1,25 @@
+--- a/drivers/gpu/drm/panel/panel-novatek-nt36532.c
++++ b/drivers/gpu/drm/panel/panel-novatek-nt36532.c
+@@ -199,6 +199,22 @@
+ 		.vsync_end = 2000 + 26 + 2,
+ 		.vtotal = 2000 + 26 + 2 + 232,
+ 	},
++	{
++		/*
++		 * 60Hz: the stock DT switches rates with dfps_immediate_porch_mode_vfp (same pixel
++		 * clock, longer vertical front porch) and sends B2=91/B3=40 for 120, 60 and 30 Hz,
++		 * which init already writes. So 60 Hz is the 120 Hz timing with vtotal doubled.
++		 */
++		.clock = (3200 + 276 + 16 + 32) * (2000 + 26 + 2 + 232) * 120 / 1000,
++		.hdisplay = 3200,
++		.hsync_start = 3200 + 276,
++		.hsync_end = 3200 + 276 + 16,
++		.htotal = 3200 + 276 + 16 + 32,
++		.vdisplay = 2000,
++		.vsync_start = 2000 + 26 + 2260,
++		.vsync_end = 2000 + 26 + 2260 + 2,
++		.vtotal = (2000 + 26 + 2 + 232) * 2,
++	},
+ };
+ 
+ static struct panel_desc nt36532_wqhd_desc = {
